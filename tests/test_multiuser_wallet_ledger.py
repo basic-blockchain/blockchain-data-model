@@ -185,7 +185,7 @@ def test_create_wallet_rejects_invalid_id_format_or_length():
     assert error == "Wallet invalida. Usa 20-30 caracteres: letras, numeros, '-' o '_'."
 
 
-def test_wallet_token_rotates_every_10_seconds_on_access():
+def test_wallet_token_rotates_every_120_seconds_on_access():
     ledger = MultiUserWalletLedger()
     ledger.create_user("u-a", "A")
 
@@ -194,11 +194,11 @@ def test_wallet_token_rotates_every_10_seconds_on_access():
         assert "creada" in created["message"]
         first = created["auth_token"]
 
-    with patch.object(MultiUserWalletLedger, "_now_epoch", return_value=109):
+    with patch.object(MultiUserWalletLedger, "_now_epoch", return_value=219):
         same = ledger.list_wallets(user_id="u-a")[0]["auth_token"]
     assert same == first
 
-    with patch.object(MultiUserWalletLedger, "_now_epoch", return_value=110):
+    with patch.object(MultiUserWalletLedger, "_now_epoch", return_value=220):
         rotated = ledger.list_wallets(user_id="u-a")[0]["auth_token"]
     assert rotated != first
 
@@ -244,7 +244,7 @@ def test_transfer_rejects_expired_sender_token_and_rotates_it():
         ledger.mint("wallet_user_alpha_01", "5")
 
     old_token = created["auth_token"]
-    with patch.object(MultiUserWalletLedger, "_now_epoch", return_value=111):
+    with patch.object(MultiUserWalletLedger, "_now_epoch", return_value=221):
         error = ledger.transfer(
             "wallet_user_alpha_01",
             "wallet_user_bravo_02",
@@ -256,6 +256,37 @@ def test_transfer_rejects_expired_sender_token_and_rotates_it():
     assert "token expirado" in error
     refreshed = ledger.list_wallets(user_id="u-a")[0]["auth_token"]
     assert refreshed != old_token
+
+
+def test_refresh_wallet_token_allows_owner_even_with_mismatch_or_expired_token():
+    ledger = MultiUserWalletLedger()
+    ledger.create_user("u-a", "A")
+
+    with patch.object(MultiUserWalletLedger, "_now_epoch", return_value=100):
+        created = ledger.create_wallet("u-a", wallet_id="wallet_user_alpha_01")
+
+    old_token = created["auth_token"]
+    with patch.object(MultiUserWalletLedger, "_now_epoch", return_value=240):
+        refreshed = ledger.refresh_wallet_token(
+            "u-a",
+            "wallet_user_alpha_01",
+            current_token="WRONGTOKEN123",
+        )
+
+    assert refreshed["wallet_id"] == "wallet_user_alpha_01"
+    assert refreshed["previous_token_matches"] is False
+    assert refreshed["previous_token_expired"] is True
+    assert refreshed["auth_token"] != old_token
+
+
+def test_refresh_wallet_token_rejects_non_owner():
+    ledger = MultiUserWalletLedger()
+    ledger.create_user("u-a", "A")
+    ledger.create_user("u-b", "B")
+    ledger.create_wallet("u-a", wallet_id="wallet_user_alpha_01")
+
+    error = ledger.refresh_wallet_token("u-b", "wallet_user_alpha_01")
+    assert "no es propietario" in error
 
 
 def test_transfer_rejects_invalid_expected_nonce():

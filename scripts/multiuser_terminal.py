@@ -42,6 +42,7 @@ def main() -> None:
         print("6) list-utxos")
         print("7) verify-integrity")
         print("8) snapshot")
+        print("9) refresh-token")
         print("0) exit")
 
         option = _ask("Option: ")
@@ -106,6 +107,17 @@ def main() -> None:
             print(json.dumps(ledger.verify_transfer_integrity(), indent=2, ensure_ascii=False))
         elif option == "8":
             print(json.dumps(ledger.state_snapshot(), indent=2, ensure_ascii=False))
+        elif option == "9":
+            user_id = _ask("user_id: ")
+            wallet_id = _ask("wallet_id: ")
+            current_token = _ask("current_token (optional): ")
+            result = ledger.refresh_wallet_token(user_id, wallet_id, current_token=current_token)
+            if isinstance(result, str) and result.startswith("Error:"):
+                print(result)
+                continue
+            rev = _persist(store, ledger)
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+            print(f"revision_id={rev}")
         elif option == "0":
             print("Bye")
             break
