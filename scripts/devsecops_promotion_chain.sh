@@ -53,7 +53,7 @@ create_promotion_pr() {
   local target="$2"
 
   local existing
-  existing="$("${GH_BIN}" pr list --repo "${ORG}/${REPO}" --state open --base "$target" --head "$source" --json number --jq '.[0].number // empty')"
+    existing="$("${GH_BIN}" pr list --repo "${ORG}/${REPO}" --state open --base "$target" --head "$source" --json number --jq '.[0].number // empty')"
   if [[ -n "$existing" ]]; then
     echo "Open PR already exists: #${existing} (${source} -> ${target})"
     return
@@ -69,7 +69,7 @@ create_promotion_pr() {
 
   local output
   set +e
-  output="$(${GH_BIN} pr create \
+    output="$("${GH_BIN}" pr create \
     --repo "${ORG}/${REPO}" \
     --base "$target" \
     --head "$source" \
