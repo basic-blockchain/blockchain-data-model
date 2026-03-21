@@ -3,3 +3,6 @@ __pycache__/
 .pytest_cache/
 data/simulation-runs/*.json
 data/multiuser/*.json
+/utxo-runs.json
+/account-runs.json
+/wallet-ledger.json
