@@ -1,5 +1,10 @@
 # Gitflow and Delivery Policy
 
+## Organization scope
+- This policy is intended for all repositories under `basic-blockchain`.
+- Keep repository governance (`CODEOWNERS`, PR templates, labels, workflows) aligned across projects.
+- Prefer a central organization repository named `.github` to host reusable workflows and templates.
+
 ## Branch model
 - `main`: production-ready history.
 - `develop`: integration branch for the next release.
@@ -19,6 +24,30 @@
 ## Merge strategy
 - Use squash merge for feature/refactor branches.
 - Use merge commit for release and hotfix branches to preserve context.
+
+## CI/CD strategy for multi-language repositories
+- Use a reusable workflow as baseline for all repositories.
+- Keep language-specific test commands configurable per repo.
+- Suggested required status check context: `CI Pull Request / ci`.
+- Minimum controls for `main` and `develop`:
+	- Required status checks enabled.
+	- Required pull request reviews enabled.
+	- Dismiss stale reviews enabled.
+	- CODEOWNERS review enabled.
+
+## Organization bootstrap automation
+- Repository-level protections:
+	- `scripts/bootstrap_github_rules.sh`
+- Organization-wide protections (all repos or selected repos):
+	- `scripts/bootstrap_org_rules.sh`
+
+Examples:
+
+```bash
+bash scripts/bootstrap_github_rules.sh basic-blockchain blockchain-data-model
+bash scripts/bootstrap_org_rules.sh basic-blockchain
+bash scripts/bootstrap_org_rules.sh basic-blockchain "repo-a,repo-b" "CI Pull Request / ci"
+```
 
 ## Commit message standard
 First line: professional title with 20+ characters.
