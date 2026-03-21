@@ -1,0 +1,7 @@
+[Write a professional title with at least 20 characters]
+
+What:
+[Describe what changed in clear technical terms]
+
+Why:
+[Explain the business or technical reason for this change]
