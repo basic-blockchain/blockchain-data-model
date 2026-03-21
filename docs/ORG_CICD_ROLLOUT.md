@@ -59,8 +59,31 @@ jobs:
   - `scripts/devsecops_org_onboarding.sh`
 - Promotion chain PR automation:
   - `scripts/devsecops_promotion_chain.sh`
+- Branch content alignment check:
+  - `scripts/devsecops_check_content_sync.sh`
 - GitHub CLI auth helper for Git Bash/Windows:
   - `scripts/gh_auth_setup.sh`
+
+## Branch content alignment guard
+- Goal: verify that `production`, `staging`, `qa`, and `develop` remain content-aligned with `main`.
+- This check compares file trees (content), not commit count differences.
+- Useful when merge history differs due to promotion-chain merge commits.
+
+Manual run:
+
+```bash
+bash scripts/devsecops_check_content_sync.sh
+```
+
+Custom targets/reference:
+
+```bash
+REFERENCE_BRANCH=main TARGET_BRANCHES="production staging qa develop" bash scripts/devsecops_check_content_sync.sh
+```
+
+GitHub Actions workflow:
+- `.github/workflows/branch-content-sync-check.yml`
+- Supports `workflow_dispatch` and daily schedule.
 
 ## GitHub CLI operational model
 Use `gh` as the standard control plane for organization-wide DevSecOps operations.
