@@ -21,13 +21,15 @@ jobs:
 ```
 
 ## Branch governance baseline
-- Protected branches: `main`, `develop`
+- Protected branches: `main`, `develop`, `production`
 - Required checks: `CI Pull Request / ci`
 - Required reviews:
   - `main`: 2
   - `develop`: 1
+  - `production`: 2
 - Require CODEOWNERS review
 - Dismiss stale approvals
+- Block direct pushes to `production`
 
 ## Rollout sequence
 1. Apply workflows and templates in this repository as reference implementation.
@@ -40,6 +42,15 @@ jobs:
   - `scripts/bootstrap_github_rules.sh`
 - Organization-wide setup:
   - `scripts/bootstrap_org_rules.sh`
+
+## Local collaboration guardrails
+- This repository includes `.githooks/pre-push` to block direct local pushes to `production`.
+- Ensure hooks are active in each clone:
+
+```bash
+git config core.hooksPath .githooks
+chmod +x .githooks/pre-push .githooks/commit-msg
+```
 
 ## Example commands
 ```bash
