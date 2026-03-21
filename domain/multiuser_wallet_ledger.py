@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import secrets
+import re
+import string
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_DOWN
 
 UNIT = Decimal("0.00000001")
+TOKEN_ALPHABET = string.ascii_letters + string.digits
 
 
 def normalize_amount(value: Decimal | int | float | str) -> Decimal:
@@ -26,6 +30,8 @@ class WalletRecord:
     user_id: str
     currency: str
     balance: Decimal
+    auth_token: str
+    token_issued_at: int
     created_at: str
 
 
@@ -91,7 +97,26 @@ class MultiUserWalletLedger:
 
     @staticmethod
     def _build_wallet_id() -> str:
-        return f"wlt-{secrets.token_hex(6)}"
+        return f"wlt-{secrets.token_hex(10)}"
+
+    @staticmethod
+    def _now_epoch() -> int:
+        return int(time.time())
+
+    @staticmethod
+    def _build_wallet_token(length: int = 12) -> str:
+        return "".join(secrets.choice(TOKEN_ALPHABET) for _ in range(length))
+
+    @staticmethod
+    def _is_valid_wallet_id(value: str) -> bool:
+        return re.fullmatch(r"[A-Za-z0-9_-]{20,30}", value) is not None
+
+    def _refresh_wallet_token_if_expired(self, wallet: WalletRecord) -> None:
+        ttl_seconds = 10
+        now = self._now_epoch()
+        if now - int(wallet.token_issued_at) >= ttl_seconds:
+            wallet.auth_token = self._build_wallet_token(12)
+            wallet.token_issued_at = now
 
     @staticmethod
     def _build_transfer_id() -> str:
@@ -338,6 +363,8 @@ class MultiUserWalletLedger:
             return f"Error: el usuario {user_id} no existe."
 
         final_wallet_id = wallet_id.strip() or self._build_wallet_id()
+        if not self._is_valid_wallet_id(final_wallet_id):
+            return "Wallet invalida. Usa 20-30 caracteres: letras, numeros, '-' o '_'."
         if final_wallet_id in self.wallets:
             return f"Error: wallet {final_wallet_id} ya existe."
 
@@ -346,6 +373,8 @@ class MultiUserWalletLedger:
             user_id=user_id,
             currency=currency,
             balance=Decimal("0"),
+            auth_token=self._build_wallet_token(12),
+            token_issued_at=self._now_epoch(),
             created_at=self._timestamp(),
         )
         self.wallets[final_wallet_id] = wallet
@@ -360,6 +389,7 @@ class MultiUserWalletLedger:
             return f"Error: wallet {wallet_id} no existe."
 
         wallet = self.wallets[wallet_id]
+        self._refresh_wallet_token_if_expired(wallet)
         wallet.balance += minted
         self.transfers.append(
             {
@@ -398,6 +428,8 @@ class MultiUserWalletLedger:
 
         sender = self.wallets[sender_wallet]
         receiver = self.wallets[receiver_wallet]
+        self._refresh_wallet_token_if_expired(sender)
+        self._refresh_wallet_token_if_expired(receiver)
         if sender.currency != receiver.currency:
             return "Error: transfer entre wallets de distinta moneda no soportada."
 
@@ -492,6 +524,7 @@ class MultiUserWalletLedger:
     def get_wallet_balance(self, wallet_id: str) -> Decimal:
         if wallet_id not in self.wallets:
             return Decimal("0")
+        self._refresh_wallet_token_if_expired(self.wallets[wallet_id])
         return self.wallets[wallet_id].balance
 
     def list_users(self) -> list[dict]:
@@ -512,12 +545,18 @@ class MultiUserWalletLedger:
         else:
             records = list(self.wallets.values())
 
+        for wallet in records:
+            self._refresh_wallet_token_if_expired(wallet)
+
         return [
             {
                 "wallet_id": wallet.wallet_id,
                 "user_id": wallet.user_id,
                 "currency": wallet.currency,
                 "balance": str(wallet.balance),
+                "auth_token": wallet.auth_token,
+                "token_issued_at": wallet.token_issued_at,
+                "token_expires_at": wallet.token_issued_at + 10,
                 "created_at": wallet.created_at,
             }
             for wallet in records
@@ -561,6 +600,8 @@ class MultiUserWalletLedger:
                 user_id=user_id,
                 currency=str(wallet.get("currency", "USDX")),
                 balance=normalize_amount(wallet.get("balance", "0")),
+                auth_token=str(wallet.get("auth_token", cls._build_wallet_token(12))),
+                token_issued_at=int(str(wallet.get("token_issued_at", cls._now_epoch()))),
                 created_at=str(wallet.get("created_at", cls._timestamp())),
             )
             ledger.wallets[wallet_id] = record
