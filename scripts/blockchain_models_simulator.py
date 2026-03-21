@@ -16,7 +16,8 @@ DEFAULT_STORE_DIR = ROOT / "data" / "simulation-runs"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from persistence.simulation_store import JsonSimulationStore
+from persistence.factory import create_simulation_store
+from persistence.interfaces import SimulationRunRepository
 
 
 def load_module(module_name: str, file_name: str):
@@ -51,9 +52,9 @@ def _print_header(title: str) -> None:
     print("=" * 72)
 
 
-def _store_for_model(model: str, store_dir: Path) -> JsonSimulationStore:
+def _store_for_model(model: str, store_dir: Path) -> SimulationRunRepository:
     model_file = f"{model}-runs.json"
-    return JsonSimulationStore(store_dir / model_file)
+    return create_simulation_store(json_path=store_dir / model_file)
 
 
 def persist_results(results: list[dict], requested_model: str, scenario: str, store_dir: Path) -> list[dict]:
