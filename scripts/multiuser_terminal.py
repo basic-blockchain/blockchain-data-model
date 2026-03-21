@@ -126,17 +126,29 @@ MENU_SECTIONS = [
         ("1", "create-user", "Registrar nuevo usuario en el ledger"),
         ("2", "create-wallet", "Crear wallet UTXO o ACCOUNT para un usuario"),
         ("9", "refresh-token", "Renovar token de autenticacion de wallet"),
+        ("12", "list-users", "Listar usuarios registrados"),
+        ("13", "balance", "Consultar balance de una wallet"),
     ]),
     ("TRANSACCIONES", [
         ("3", "mint", "Emitir tokens a una wallet"),
         ("4", "transfer", "Transferir fondos entre wallets"),
         ("10", "transfer-wizard", "Asistente interactivo de transferencia"),
     ]),
+    ("POLITICAS & RIESGO", [
+        ("14", "set-policy", "Configurar politica de transferencia"),
+        ("15", "get-policy", "Ver politica de un usuario"),
+        ("16", "list-policies", "Listar todas las politicas"),
+        ("17", "set-risk-profile", "Asignar perfil de riesgo a usuario"),
+        ("18", "get-risk-profile", "Ver perfil de riesgo de un usuario"),
+        ("19", "list-risk-profiles", "Listar perfiles de riesgo"),
+        ("20", "list-alerts", "Ver alertas generadas"),
+    ]),
     ("CONSULTAS", [
         ("5", "list-wallets", "Listar wallets registradas"),
         ("6", "list-utxos", "Listar UTXOs de una wallet"),
         ("7", "verify-integrity", "Verificar integridad nonce + hash-chain"),
         ("8", "snapshot", "Exportar estado completo del ledger"),
+        ("21", "list-revisions", "Historial de revisiones del ledger"),
     ]),
     ("SISTEMA", [
         ("11", "dashboard", "Metricas de sesion y rendimiento"),
@@ -189,9 +201,10 @@ def _print_data_box(title: str, data: dict | list | str, revision_id: str | None
     if isinstance(data, dict):
         for key, val in data.items():
             val_str = str(val)
-            if len(val_str) > 50:
-                val_str = val_str[:47] + "..."
-            print(_box_line(f"  {_dim(key + ':'):<30} {_bold(val_str)}"))
+            max_val = W - 22
+            if len(val_str) > max_val:
+                val_str = val_str[:max_val - 3] + "..."
+            print(_box_line(f"  {_dim(key + ':'):<22} {_bold(val_str)}"))
     elif isinstance(data, list):
         if data and isinstance(data[0], dict):
             for i, item in enumerate(data[:20]):
@@ -199,9 +212,10 @@ def _print_data_box(title: str, data: dict | list | str, revision_id: str | None
                     print(_box_line(_dim("  " + "─" * (W - 4))))
                 for key, val in item.items():
                     val_str = str(val)
-                    if len(val_str) > 50:
-                        val_str = val_str[:47] + "..."
-                    print(_box_line(f"  {_dim(key + ':'):<30} {val_str}"))
+                    max_val = W - 22
+                    if len(val_str) > max_val:
+                        val_str = val_str[:max_val - 3] + "..."
+                    print(_box_line(f"  {_dim(key + ':'):<22} {val_str}"))
             if len(data) > 20:
                 print(_box_line(_dim(f"  ... y {len(data) - 20} mas")))
         else:
@@ -770,6 +784,148 @@ def main() -> None:
 
         elif option == "11":
             _print_dashboard(session)
+
+        elif option == "12":
+            _section_header("LISTAR USUARIOS")
+            input_units = _measure_units("list-users")
+            started_at = time.perf_counter()
+            result = ledger.list_users()
+            elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+            _print_data_box(f"Usuarios ({len(result)} registrados)", result)
+            _apply_result_to_session(
+                session, action="list-users", result=result,
+                revision_id=None, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
+            )
+
+        elif option == "13":
+            _section_header("CONSULTAR BALANCE")
+            wallet_id = _prompt("wallet_id")
+            input_units = _measure_units(wallet_id)
+            started_at = time.perf_counter()
+            balance = ledger.get_wallet_balance(wallet_id)
+            elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+            result = {"wallet_id": wallet_id, "balance": str(balance)}
+            _print_data_box("Balance", result)
+            _apply_result_to_session(
+                session, action="balance", result=result,
+                revision_id=None, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
+            )
+
+        elif option == "14":
+            _section_header("CONFIGURAR POLITICA")
+            user_id = _prompt("user_id")
+            can_transfer = _prompt("can_transfer", hint="true/false", default="true").lower() in ("true", "1", "yes")
+            daily_limit = _prompt("daily_limit", hint="(opcional, vacio=sin limite)")
+            input_units = _measure_units(user_id, can_transfer, daily_limit)
+            started_at = time.perf_counter()
+            dl = Decimal(daily_limit) if daily_limit else None
+            result = ledger.set_user_policy(user_id, can_transfer=can_transfer, daily_limit=dl)
+            rev = _persist(store, ledger)
+            elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+            _print_data_box("Politica configurada", result if isinstance(result, dict) else {"resultado": result}, rev)
+            _apply_result_to_session(
+                session, action="set-policy", result=result,
+                revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
+            )
+
+        elif option == "15":
+            _section_header("VER POLITICA")
+            user_id = _prompt("user_id")
+            input_units = _measure_units(user_id)
+            started_at = time.perf_counter()
+            result = ledger.get_user_policy(user_id)
+            elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+            _print_data_box("Politica de usuario", result)
+            _apply_result_to_session(
+                session, action="get-policy", result=result,
+                revision_id=None, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
+            )
+
+        elif option == "16":
+            _section_header("LISTAR POLITICAS")
+            input_units = _measure_units("list-policies")
+            started_at = time.perf_counter()
+            result = ledger.list_user_policies()
+            elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+            _print_data_box(f"Politicas ({len(result)} registradas)", result)
+            _apply_result_to_session(
+                session, action="list-policies", result=result,
+                revision_id=None, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
+            )
+
+        elif option == "17":
+            _section_header("ASIGNAR PERFIL DE RIESGO")
+            user_id = _prompt("user_id")
+            profile_name = _prompt("profile_name", hint="STANDARD/LOW/MEDIUM/HIGH/RESTRICTED", default="STANDARD").upper()
+            daily_limit = _prompt("daily_limit", hint="(opcional)")
+            transfer_threshold = _prompt("transfer_alert_threshold", hint="(opcional)")
+            daily_threshold = _prompt("daily_alert_threshold", hint="(opcional)")
+            input_units = _measure_units(user_id, profile_name, daily_limit, transfer_threshold, daily_threshold)
+            started_at = time.perf_counter()
+            dl = Decimal(daily_limit) if daily_limit else None
+            tt = Decimal(transfer_threshold) if transfer_threshold else None
+            dt = Decimal(daily_threshold) if daily_threshold else None
+            result = ledger.set_user_risk_profile(user_id, profile_name=profile_name, daily_limit=dl, transfer_alert_threshold=tt, daily_alert_threshold=dt)
+            rev = _persist(store, ledger)
+            elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+            _print_data_box("Perfil de riesgo asignado", result if isinstance(result, dict) else {"resultado": result}, rev)
+            _apply_result_to_session(
+                session, action="set-risk-profile", result=result,
+                revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
+            )
+
+        elif option == "18":
+            _section_header("VER PERFIL DE RIESGO")
+            user_id = _prompt("user_id")
+            input_units = _measure_units(user_id)
+            started_at = time.perf_counter()
+            result = ledger.get_user_risk_profile(user_id)
+            elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+            _print_data_box("Perfil de riesgo", result)
+            _apply_result_to_session(
+                session, action="get-risk-profile", result=result,
+                revision_id=None, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
+            )
+
+        elif option == "19":
+            _section_header("LISTAR PERFILES DE RIESGO")
+            input_units = _measure_units("list-risk-profiles")
+            started_at = time.perf_counter()
+            result = ledger.list_user_risk_profiles()
+            elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+            _print_data_box(f"Perfiles de riesgo ({len(result)})", result)
+            _apply_result_to_session(
+                session, action="list-risk-profiles", result=result,
+                revision_id=None, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
+            )
+
+        elif option == "20":
+            _section_header("LISTAR ALERTAS")
+            user_id = _prompt("user_id", hint="(opcional)")
+            severity = _prompt("severity", hint="LOW/MEDIUM/HIGH (opcional)")
+            input_units = _measure_units(user_id, severity)
+            started_at = time.perf_counter()
+            result = ledger.list_alerts(user_id=user_id, severity=severity)
+            elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+            _print_data_box(f"Alertas ({len(result)} encontradas)", result)
+            _apply_result_to_session(
+                session, action="list-alerts", result=result,
+                revision_id=None, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
+            )
+
+        elif option == "21":
+            _section_header("HISTORIAL DE REVISIONES")
+            limit_raw = _prompt("limit", default="10")
+            limit = int(limit_raw) if limit_raw.isdigit() else 10
+            input_units = _measure_units(limit)
+            started_at = time.perf_counter()
+            result = store.list_revisions(limit=limit)
+            elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+            _print_data_box(f"Revisiones ({len(result)} recientes)", result)
+            _apply_result_to_session(
+                session, action="list-revisions", result=result,
+                revision_id=None, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
+            )
 
         elif option == "0":
             print()
