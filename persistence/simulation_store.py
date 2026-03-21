@@ -6,7 +6,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-class JsonSimulationStore:
+from persistence.interfaces import SimulationRunRepository
+
+
+class JsonSimulationStore(SimulationRunRepository):
     """File-based JSON persistence for simulation runs and movement history."""
 
     def __init__(self, file_path: Path):
