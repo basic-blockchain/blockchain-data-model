@@ -202,7 +202,10 @@ def main() -> None:
         if mutate:
             revision_id = store.save_ledger(ledger)
 
-        success = not (isinstance(result, str) and result.startswith("Error:"))
+        success = not (
+            isinstance(result, str)
+            and (result.startswith("Error:") or result.startswith("Wallet invalida."))
+        )
         if output_json:
             payload = {
                 "success": success,
