@@ -57,6 +57,12 @@ def main() -> None:
     cmd_wallet.add_argument("--currency", default="USDX")
     cmd_wallet.add_argument("--model", default="ACCOUNT", choices=["ACCOUNT", "UTXO", "account", "utxo"])
 
+    cmd_refresh_token = subparsers.add_parser("refresh-token", help="Renew wallet token for owner user")
+    _add_json_flag(cmd_refresh_token)
+    cmd_refresh_token.add_argument("--user-id", required=True)
+    cmd_refresh_token.add_argument("--wallet-id", required=True)
+    cmd_refresh_token.add_argument("--current-token", default="")
+
     cmd_mint = subparsers.add_parser("mint", help="Mint funds into a wallet")
     _add_json_flag(cmd_mint)
     cmd_mint.add_argument("--wallet-id", required=True)
@@ -154,6 +160,13 @@ def main() -> None:
                 wallet_id=args.wallet_id,
                 currency=args.currency,
                 model=args.model,
+            )
+            mutate = True
+        elif args.command == "refresh-token":
+            result = ledger.refresh_wallet_token(
+                args.user_id,
+                args.wallet_id,
+                current_token=args.current_token,
             )
             mutate = True
         elif args.command == "mint":

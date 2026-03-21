@@ -659,3 +659,95 @@ def test_cli_utxo_model_transfer_and_list_utxos(tmp_path):
     assert payload["success"] is True
     assert len(payload["result"]) == 1
     assert payload["result"][0]["amount"] == "3.00000000"
+
+
+def test_cli_refresh_token_for_owner(tmp_path):
+    repo_root = Path(__file__).resolve().parents[1]
+    store_file = tmp_path / "wallet-ledger.json"
+
+    assert _run_cli(
+        ["--store-file", str(store_file), "create-user", "--user-id", "u1", "--display-name", "User One"],
+        cwd=repo_root,
+    ).returncode == 0
+
+    wallet = _run_cli(
+        [
+            "--store-file",
+            str(store_file),
+            "create-wallet",
+            "--user-id",
+            "u1",
+            "--wallet-id",
+            "wallet_user_alpha_01",
+            "--json",
+        ],
+        cwd=repo_root,
+    )
+    assert wallet.returncode == 0
+    old_token = json.loads(wallet.stdout)["result"]["auth_token"]
+
+    refreshed = _run_cli(
+        [
+            "--store-file",
+            str(store_file),
+            "refresh-token",
+            "--user-id",
+            "u1",
+            "--wallet-id",
+            "wallet_user_alpha_01",
+            "--current-token",
+            "DOES_NOT_MATCH",
+            "--json",
+        ],
+        cwd=repo_root,
+    )
+    assert refreshed.returncode == 0
+    payload = json.loads(refreshed.stdout)
+    assert payload["success"] is True
+    assert payload["result"]["previous_token_matches"] is False
+    assert payload["result"]["auth_token"] != old_token
+
+
+def test_cli_refresh_token_rejects_non_owner(tmp_path):
+    repo_root = Path(__file__).resolve().parents[1]
+    store_file = tmp_path / "wallet-ledger.json"
+
+    assert _run_cli(
+        ["--store-file", str(store_file), "create-user", "--user-id", "u1", "--display-name", "User One"],
+        cwd=repo_root,
+    ).returncode == 0
+    assert _run_cli(
+        ["--store-file", str(store_file), "create-user", "--user-id", "u2", "--display-name", "User Two"],
+        cwd=repo_root,
+    ).returncode == 0
+    assert _run_cli(
+        [
+            "--store-file",
+            str(store_file),
+            "create-wallet",
+            "--user-id",
+            "u1",
+            "--wallet-id",
+            "wallet_user_alpha_01",
+            "--json",
+        ],
+        cwd=repo_root,
+    ).returncode == 0
+
+    denied = _run_cli(
+        [
+            "--store-file",
+            str(store_file),
+            "refresh-token",
+            "--user-id",
+            "u2",
+            "--wallet-id",
+            "wallet_user_alpha_01",
+            "--json",
+        ],
+        cwd=repo_root,
+    )
+    assert denied.returncode == 1
+    payload = json.loads(denied.stdout)
+    assert payload["success"] is False
+    assert "no es propietario" in payload["result"]
