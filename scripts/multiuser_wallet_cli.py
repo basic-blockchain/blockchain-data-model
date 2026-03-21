@@ -1,0 +1,162 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_STORE = ROOT / "data" / "multiuser" / "wallet-ledger.json"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from domain.multiuser_wallet_ledger import MultiUserWalletLedger
+from persistence.multiuser_wallet_store import JsonMultiUserWalletStore
+
+
+def _print_json(payload: dict | list) -> None:
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
+
+
+def _load_ledger(store_path: Path) -> tuple[JsonMultiUserWalletStore, MultiUserWalletLedger]:
+    store = JsonMultiUserWalletStore(store_path)
+    ledger = store.load_ledger()
+    return store, ledger
+
+
+def _add_json_flag(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--json", dest="cmd_json", action="store_true", help="JSON output mode")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Multi-user wallet ledger CLI")
+    parser.add_argument("--store-file", default=str(DEFAULT_STORE), help="Path to the JSON ledger store")
+    parser.add_argument("--json", action="store_true", help="JSON output mode")
+
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    cmd_user = subparsers.add_parser("create-user", help="Create a user")
+    _add_json_flag(cmd_user)
+    cmd_user.add_argument("--user-id", required=True)
+    cmd_user.add_argument("--display-name", required=True)
+
+    cmd_wallet = subparsers.add_parser("create-wallet", help="Create a wallet for an existing user")
+    _add_json_flag(cmd_wallet)
+    cmd_wallet.add_argument("--user-id", required=True)
+    cmd_wallet.add_argument("--wallet-id", default="")
+    cmd_wallet.add_argument("--currency", default="USDX")
+
+    cmd_mint = subparsers.add_parser("mint", help="Mint funds into a wallet")
+    _add_json_flag(cmd_mint)
+    cmd_mint.add_argument("--wallet-id", required=True)
+    cmd_mint.add_argument("--amount", required=True)
+    cmd_mint.add_argument("--reference", default="MINT")
+
+    cmd_transfer = subparsers.add_parser("transfer", help="Transfer funds between wallets")
+    _add_json_flag(cmd_transfer)
+    cmd_transfer.add_argument("--from-wallet", required=True)
+    cmd_transfer.add_argument("--to-wallet", required=True)
+    cmd_transfer.add_argument("--amount", required=True)
+    cmd_transfer.add_argument("--fee", default="0")
+    cmd_transfer.add_argument("--reference", default="")
+
+    cmd_balance = subparsers.add_parser("balance", help="Get wallet balance")
+    _add_json_flag(cmd_balance)
+    cmd_balance.add_argument("--wallet-id", required=True)
+
+    cmd_users = subparsers.add_parser("list-users", help="List all users")
+    _add_json_flag(cmd_users)
+
+    cmd_wallets = subparsers.add_parser("list-wallets", help="List wallets")
+    _add_json_flag(cmd_wallets)
+    cmd_wallets.add_argument("--user-id", default="")
+
+    cmd_snapshot = subparsers.add_parser("snapshot", help="Get full ledger snapshot")
+    _add_json_flag(cmd_snapshot)
+
+    cmd_revisions = subparsers.add_parser("list-revisions", help="List saved revisions")
+    _add_json_flag(cmd_revisions)
+    cmd_revisions.add_argument("--limit", type=int, default=20)
+
+    args = parser.parse_args()
+    store_file = Path(args.store_file)
+    output_json = bool(args.json or getattr(args, "cmd_json", False))
+
+    try:
+        store, ledger = _load_ledger(store_file)
+
+        mutate = False
+        result: dict | list | str
+
+        if args.command == "create-user":
+            result = ledger.create_user(args.user_id, args.display_name)
+            mutate = True
+        elif args.command == "create-wallet":
+            result = ledger.create_wallet(args.user_id, wallet_id=args.wallet_id, currency=args.currency)
+            mutate = True
+        elif args.command == "mint":
+            result = ledger.mint(args.wallet_id, args.amount, reference=args.reference)
+            mutate = True
+        elif args.command == "transfer":
+            result = ledger.transfer(
+                args.from_wallet,
+                args.to_wallet,
+                args.amount,
+                fee=args.fee,
+                reference=args.reference,
+            )
+            mutate = True
+        elif args.command == "balance":
+            result = {
+                "wallet_id": args.wallet_id,
+                "balance": str(ledger.get_wallet_balance(args.wallet_id)),
+            }
+        elif args.command == "list-users":
+            result = ledger.list_users()
+        elif args.command == "list-wallets":
+            result = ledger.list_wallets(user_id=args.user_id)
+        elif args.command == "snapshot":
+            result = ledger.state_snapshot()
+        elif args.command == "list-revisions":
+            result = store.list_revisions(limit=args.limit)
+        else:
+            result = "Error: command no soportado."
+
+        revision_id = ""
+        if mutate:
+            revision_id = store.save_ledger(ledger)
+
+        success = not (isinstance(result, str) and result.startswith("Error:"))
+        if output_json:
+            payload = {
+                "success": success,
+                "result": result,
+                "revision_id": revision_id,
+                "store_file": str(store_file.resolve()),
+            }
+            _print_json(payload)
+            sys.exit(0 if success else 1)
+
+        print(result)
+        if revision_id:
+            print(f"revision_id={revision_id}")
+        sys.exit(0 if success else 1)
+    except Exception as exc:
+        if output_json:
+            _print_json(
+                {
+                    "success": False,
+                    "error": str(exc),
+                    "error_type": exc.__class__.__name__,
+                    "revision_id": "",
+                    "store_file": str(store_file.resolve()),
+                }
+            )
+        else:
+            print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
