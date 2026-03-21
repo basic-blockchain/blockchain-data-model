@@ -1,8 +1,12 @@
 from scripts.multiuser_terminal import (
     SessionState,
     _apply_result_to_session,
+    _is_domain_error_result,
     _meter,
+    _measure_units,
     _parse_optional_int,
+    _sender_token_prompt,
+    _print_pending_feedback,
     _resolve_sender_token,
     _short_json,
 )
@@ -82,24 +86,68 @@ def test_meter_render_has_expected_width():
     assert bar.count("-") == 5
 
 
+def test_is_domain_error_result_handles_wallet_invalida_and_error_prefix():
+    assert _is_domain_error_result("Error: sender_token es requerido") is True
+    assert _is_domain_error_result("Wallet invalida. Usa 20-30 caracteres") is True
+    assert _is_domain_error_result({"ok": True}) is False
+
+
+def test_sender_token_prompt_mentions_session_when_token_available():
+    assert _sender_token_prompt(SessionState()) == "sender_token: "
+    assert _sender_token_prompt(SessionState(last_token="TOKEN_X")) == "sender_token (enter=usar token de sesion): "
+
+
+def test_apply_result_stores_pending_feedback():
+    session = SessionState()
+    _apply_result_to_session(
+        session,
+        action="create-user",
+        result="Usuario creado",
+        revision_id="rev-1",
+        is_error=False,
+    )
+    assert session.pending_feedback_kind == "SUCCESS"
+    assert session.pending_feedback_action == "create-user"
+    assert session.pending_feedback_message == "Usuario creado"
+
+
+def test_print_pending_feedback_clears_buffer(capsys):
+    session = SessionState(
+        pending_feedback_kind="SUCCESS",
+        pending_feedback_action="test-action",
+        pending_feedback_message="test",
+    )
+    _print_pending_feedback(session)
+    captured = capsys.readouterr()
+    assert "Resultado inmediato:" in captured.out
+    assert "[SUCCESS] test-action" in captured.out
+    assert "Mensaje: test" in captured.out
+    assert session.pending_feedback_action == ""
+
+
 def test_apply_result_tracks_command_metrics_and_exec_time():
     session = SessionState()
+
+    first_result = {"status": "ok"}
+    second_result = "Error: failed"
 
     _apply_result_to_session(
         session,
         action="transfer",
-        result={"status": "ok"},
+        result=first_result,
         revision_id="rev-1",
         is_error=False,
         elapsed_ms=25.0,
+        input_units=50,
     )
     _apply_result_to_session(
         session,
         action="transfer",
-        result="Error: failed",
+        result=second_result,
         revision_id=None,
         is_error=True,
         elapsed_ms=15.0,
+        input_units=30,
     )
 
     assert session.total_commands == 2
@@ -107,5 +155,10 @@ def test_apply_result_tracks_command_metrics_and_exec_time():
     assert session.failed_commands == 1
     assert session.total_exec_ms == 40.0
     assert session.last_exec_ms == 15.0
+    expected_output_units = _measure_units(first_result) + _measure_units(second_result)
+    assert session.total_input_units == 80
+    assert session.total_output_units == expected_output_units
+    assert session.total_saved_units == max(0, 50 - _measure_units(first_result)) + max(0, 30 - _measure_units(second_result))
     assert session.command_metrics["transfer"]["count"] == 2
     assert session.command_metrics["transfer"]["ok"] == 1
+    assert session.command_metrics["transfer"]["input_units"] == 80

@@ -27,6 +27,12 @@ class SessionState:
     failed_commands: int = 0
     total_exec_ms: float = 0.0
     last_exec_ms: float = 0.0
+    total_input_units: int = 0
+    total_output_units: int = 0
+    total_saved_units: int = 0
+    pending_feedback_kind: str = ""
+    pending_feedback_action: str = ""
+    pending_feedback_message: str = ""
     command_metrics: dict[str, dict[str, float | int]] = field(default_factory=dict)
 
 
@@ -75,10 +81,33 @@ def _meter(percentage: float, width: int = 24) -> str:
     return "#" * filled + "-" * (width - filled)
 
 
-def _register_command_metric(session: SessionState, action: str, is_error: bool, elapsed_ms: float, result) -> None:
+def _measure_units(*values) -> int:
+    total = 0
+    for value in values:
+        if value is None:
+            continue
+        if isinstance(value, (dict, list)):
+            total += len(json.dumps(value, ensure_ascii=False, sort_keys=True))
+        else:
+            total += len(str(value))
+    return total
+
+
+def _register_command_metric(
+    session: SessionState,
+    action: str,
+    is_error: bool,
+    elapsed_ms: float,
+    input_units: int,
+    output_units: int,
+) -> None:
     session.total_commands += 1
     session.total_exec_ms += max(0.0, elapsed_ms)
     session.last_exec_ms = max(0.0, elapsed_ms)
+    session.total_input_units += max(0, input_units)
+    session.total_output_units += max(0, output_units)
+    saved_units = max(0, input_units - output_units)
+    session.total_saved_units += saved_units
     if is_error:
         session.failed_commands += 1
     else:
@@ -89,12 +118,21 @@ def _register_command_metric(session: SessionState, action: str, is_error: bool,
         {
             "count": 0,
             "ok": 0,
+            "input_units": 0,
+            "output_units": 0,
+            "saved_units": 0,
+            "save_percent_sum": 0.0,
             "total_ms": 0.0,
         },
     )
     metric["count"] = int(metric["count"]) + 1
     if not is_error:
         metric["ok"] = int(metric["ok"]) + 1
+    metric["input_units"] = int(metric["input_units"]) + max(0, input_units)
+    metric["output_units"] = int(metric["output_units"]) + max(0, output_units)
+    metric["saved_units"] = int(metric["saved_units"]) + saved_units
+    save_percent = (saved_units / input_units) * 100.0 if input_units > 0 else 0.0
+    metric["save_percent_sum"] = float(metric["save_percent_sum"]) + save_percent
     metric["total_ms"] = float(metric["total_ms"]) + max(0.0, elapsed_ms)
 
 
@@ -117,13 +155,25 @@ def _resolve_sender_token(session: SessionState, provided_token: str) -> str:
     return ""
 
 
+def _sender_token_prompt(session: SessionState) -> str:
+    if session.last_token != "-":
+        return "sender_token (enter=usar token de sesion): "
+    return "sender_token: "
+
+
+def _is_domain_error_result(result) -> bool:
+    if not isinstance(result, str):
+        return False
+    return result.startswith("Error:") or result.startswith("Wallet invalida")
+
+
 def _run_transfer_wizard(ledger, session: SessionState):
     print("\nTransfer wizard")
     from_wallet = _ask("from_wallet: ")
     to_wallet = _ask("to_wallet: ")
     amount = _ask("amount: ")
     fee = _ask("fee (default 0): ") or "0"
-    sender_token_input = _ask("sender_token (enter=use last token): ")
+    sender_token_input = _ask(_sender_token_prompt(session))
     sender_token = _resolve_sender_token(session, sender_token_input)
     expected_nonce_raw = _ask("expected_nonce (optional): ")
     expected_nonce, nonce_error = _parse_optional_int(expected_nonce_raw, "expected_nonce")
@@ -138,11 +188,20 @@ def _run_transfer_wizard(ledger, session: SessionState):
     print(f"- sender_token_source: {'provided' if sender_token_input.strip() else 'session-last-token'}")
     print(f"- expected_nonce: {expected_nonce if expected_nonce is not None else '-'}")
     confirm = (_ask("confirm (y/N): ") or "n").lower()
+    input_units = _measure_units(
+        from_wallet,
+        to_wallet,
+        amount,
+        fee,
+        sender_token,
+        expected_nonce,
+        confirm,
+    )
     if confirm != "y":
-        return "Cancelled by user", True
+        return "Cancelled by user", True, input_units
 
     if not sender_token:
-        return "Error: sender_token es requerido y no hay token de sesion", True
+        return "Error: sender_token es requerido y no hay token de sesion", True, input_units
 
     result = ledger.transfer(
         from_wallet,
@@ -152,8 +211,8 @@ def _run_transfer_wizard(ledger, session: SessionState):
         sender_token=sender_token,
         expected_nonce=expected_nonce,
     )
-    is_error = isinstance(result, str) and result.startswith("Error:")
-    return result, is_error
+    is_error = _is_domain_error_result(result)
+    return result, is_error, input_units
 
 
 def _apply_result_to_session(
@@ -164,6 +223,7 @@ def _apply_result_to_session(
     revision_id: str | None,
     is_error: bool,
     elapsed_ms: float = 0.0,
+    input_units: int = 0,
 ) -> None:
     session.last_action = action
     session.last_status = "ERROR" if is_error else "OK"
@@ -172,7 +232,37 @@ def _apply_result_to_session(
     token = _extract_token_from_result(result)
     if token:
         session.last_token = token
-    _register_command_metric(session, action, is_error, elapsed_ms, result)
+    session.pending_feedback_kind = "ERROR" if is_error else "SUCCESS"
+    session.pending_feedback_action = action
+    session.pending_feedback_message = _short_json(result, max_len=180)
+    output_units = _measure_units(result)
+    _register_command_metric(session, action, is_error, elapsed_ms, input_units, output_units)
+
+
+def _print_alert(kind: str, action: str, message: str) -> None:
+    if kind == "ERROR":
+        color = "1;31"
+    else:
+        color = "1;32"
+    label = f"[{kind}]"
+    title = f"{label} {action}"
+    body = f"Mensaje: {message}"
+
+    border = "+" + "-" * 76 + "+"
+    print(_style(border, color))
+    print(_style(f"| {title:<74} |", color))
+    print(_style(f"| {body:<74} |", color))
+    print(_style(border, color))
+
+
+def _print_pending_feedback(session: SessionState) -> None:
+    if not session.pending_feedback_action:
+        return
+    print("\nResultado inmediato:")
+    _print_alert(session.pending_feedback_kind, session.pending_feedback_action, session.pending_feedback_message)
+    session.pending_feedback_kind = ""
+    session.pending_feedback_action = ""
+    session.pending_feedback_message = ""
 
 
 def _print_session(session: SessionState) -> None:
@@ -180,47 +270,44 @@ def _print_session(session: SessionState) -> None:
     print(_style("Console UX Dashboard", "1;36"))
     print("-" * 78)
 
-    efficiency = 0.0
-    if session.total_commands > 0:
-        efficiency = (session.successful_commands / session.total_commands) * 100.0
+    efficiency = (session.total_saved_units / session.total_input_units) * 100.0 if session.total_input_units > 0 else 0.0
 
     avg_exec_ms = 0.0
     if session.total_commands > 0:
         avg_exec_ms = session.total_exec_ms / session.total_commands
 
+    saved_percent = (session.total_saved_units / session.total_input_units) * 100.0 if session.total_input_units > 0 else 0.0
+
     eff_text = _style(f"{efficiency:5.1f}%", "1;32") if efficiency >= 70.0 else _style(f"{efficiency:5.1f}%", "1;33")
-    status_text = _style(session.last_status, "1;31") if session.last_status == "ERROR" else _style(session.last_status, "1;32")
+    avg_text = _style(f"{saved_percent:5.1f}%", "1;32") if saved_percent >= 70.0 else _style(f"{saved_percent:5.1f}%", "1;33")
 
     print(f"Total commands:      {session.total_commands}")
-    print(f"Success / Errors:    {session.successful_commands} / {session.failed_commands}")
-    print(f"Last exec time:      {session.last_exec_ms:.1f}ms")
-    print(f"Average exec time:   {avg_exec_ms:.1f}ms")
-    print(f"Last action/status:  {session.last_action} / {status_text}")
-    print(f"Last revision id:    {session.last_revision_id}")
-    print(f"Last token:          {session.last_token}")
-    print(f"Last message:        {session.last_message}")
+    print(f"Input tokens:        {session.total_input_units}")
+    print(f"Output tokens:       {session.total_output_units}")
+    print(f"Tokens saved:        {session.total_saved_units} ({avg_text})")
+    print(f"Total exec time:     {session.total_exec_ms:.0f}ms (avg {avg_exec_ms:.0f}ms)")
     print(f"Efficiency meter:    [{_style(_meter(efficiency), '1;32')}] {eff_text}")
 
     print("\nBy Command")
     print("-" * 78)
-    print(f"{'#':<3} {'Command':<22} {'Count':>5} {'OK':>5} {'Avg%':>7} {'Time':>10} {'Impact':>20}")
+    print(f"{'#':<3} {'Command':<22} {'Count':>5} {'Saved':>7} {'Avg%':>7} {'Time':>10} {'Impact':>20}")
     print("-" * 78)
 
     if not session.command_metrics:
-        print("1. no-commands-yet           0     0    0.0%      0.0ms  [--------------------]")
+        print("1. no-commands-yet           0       0    0.0%      0.0ms  [--------------------]")
         return
 
     rows = sorted(session.command_metrics.items(), key=lambda item: int(item[1]["count"]), reverse=True)
     for idx, (name, metric) in enumerate(rows, start=1):
         count = int(metric["count"])
-        ok = int(metric["ok"])
-        avg_percent = ((ok / count) * 100.0) if count else 0.0
+        saved = int(metric["saved_units"])
+        avg_percent = (float(metric["save_percent_sum"]) / count) if count else 0.0
         avg_ms = (float(metric["total_ms"]) / count) if count else 0.0
-        impact_percent = ((count / session.total_commands) * 100.0) if session.total_commands else 0.0
+        impact_percent = ((saved / session.total_saved_units) * 100.0) if session.total_saved_units else ((count / session.total_commands) * 100.0 if session.total_commands else 0.0)
         impact_bar = _meter(impact_percent, width=20)
         avg_text = _style(f"{avg_percent:5.1f}%", "1;32") if avg_percent >= 70 else _style(f"{avg_percent:5.1f}%", "1;33")
         print(
-            f"{idx}. {name:<22} {count:>5} {ok:>5} {avg_text:>7} {avg_ms:>9.1f}ms  [{_style(impact_bar, '1;36')}]"
+            f"{idx}. {name:<22} {count:>5} {saved:>7} {avg_text:>7} {avg_ms:>9.1f}ms  [{_style(impact_bar, '1;36')}]"
         )
 
 
@@ -229,9 +316,10 @@ def main() -> None:
     session = SessionState()
     print("Multiuser Terminal (ACCOUNT/UTXO)")
     print(f"Store: {store_file}")
+    print("Tip: usa 11 para ver el dashboard completo cuando lo necesites.")
 
     while True:
-        _print_session(session)
+        _print_pending_feedback(session)
         print("\nMenu:")
         print("1) create-user")
         print("2) create-wallet")
@@ -243,6 +331,7 @@ def main() -> None:
         print("8) snapshot")
         print("9) refresh-token")
         print("10) transfer-wizard")
+        print("11) view-dashboard")
         print("0) exit")
 
         option = _ask("Option: ")
@@ -251,6 +340,7 @@ def main() -> None:
         if option == "1":
             user_id = _ask("user_id: ")
             display_name = _ask("display_name: ")
+            input_units = _measure_units(user_id, display_name)
             started_at = time.perf_counter()
             result = ledger.create_user(user_id, display_name)
             rev = _persist(store, ledger)
@@ -264,16 +354,18 @@ def main() -> None:
                 revision_id=rev,
                 is_error=False,
                 elapsed_ms=elapsed_ms,
+                input_units=input_units,
             )
         elif option == "2":
             user_id = _ask("user_id: ")
             wallet_id = _ask("wallet_id (20-30, enter=auto): ")
             currency = _ask("currency (default USDX): ") or "USDX"
             model = (_ask("model ACCOUNT|UTXO (default ACCOUNT): ") or "ACCOUNT").upper()
+            input_units = _measure_units(user_id, wallet_id, currency, model)
             started_at = time.perf_counter()
             result = ledger.create_wallet(user_id, wallet_id=wallet_id, currency=currency, model=model)
             elapsed_ms = (time.perf_counter() - started_at) * 1000.0
-            if isinstance(result, str) and result.startswith("Error:"):
+            if _is_domain_error_result(result):
                 print(result)
                 _apply_result_to_session(
                     session,
@@ -282,11 +374,16 @@ def main() -> None:
                     revision_id=None,
                     is_error=True,
                     elapsed_ms=elapsed_ms,
+                    input_units=input_units,
                 )
                 continue
             persist_started = time.perf_counter()
             rev = _persist(store, ledger)
             elapsed_ms += (time.perf_counter() - persist_started) * 1000.0
+            print("Wallet creada correctamente.")
+            if isinstance(result, dict) and result.get("auth_token"):
+                print(f"TOKEN para transfer/refresh-token: {result['auth_token']}")
+                print("Tip: en transfer, presiona Enter en sender_token para reutilizar el token de sesion.")
             print(json.dumps(result, indent=2, ensure_ascii=False))
             print(f"revision_id={rev}")
             _apply_result_to_session(
@@ -296,11 +393,13 @@ def main() -> None:
                 revision_id=rev,
                 is_error=False,
                 elapsed_ms=elapsed_ms,
+                input_units=input_units,
             )
         elif option == "3":
             wallet_id = _ask("wallet_id: ")
             amount = _ask("amount: ")
             reference = _ask("reference (default MINT): ") or "MINT"
+            input_units = _measure_units(wallet_id, amount, reference)
             started_at = time.perf_counter()
             result = ledger.mint(wallet_id, amount, reference=reference)
             elapsed_ms = (time.perf_counter() - started_at) * 1000.0
@@ -309,15 +408,24 @@ def main() -> None:
             elapsed_ms += (time.perf_counter() - persist_started) * 1000.0
             print(result)
             print(f"revision_id={rev}")
-            _apply_result_to_session(session, action="mint", result=result, revision_id=rev, is_error=False, elapsed_ms=elapsed_ms)
+            _apply_result_to_session(
+                session,
+                action="mint",
+                result=result,
+                revision_id=rev,
+                is_error=False,
+                elapsed_ms=elapsed_ms,
+                input_units=input_units,
+            )
         elif option == "4":
             from_wallet = _ask("from_wallet: ")
             to_wallet = _ask("to_wallet: ")
             amount = _ask("amount: ")
             fee = _ask("fee (default 0): ") or "0"
-            sender_token = _resolve_sender_token(session, _ask("sender_token (enter=use last token): "))
+            sender_token = _resolve_sender_token(session, _ask(_sender_token_prompt(session)))
             expected_nonce_raw = _ask("expected_nonce (optional): ")
             expected_nonce, nonce_error = _parse_optional_int(expected_nonce_raw, "expected_nonce")
+            input_units = _measure_units(from_wallet, to_wallet, amount, fee, sender_token, expected_nonce)
             if nonce_error:
                 print(nonce_error)
                 _apply_result_to_session(
@@ -327,6 +435,7 @@ def main() -> None:
                     revision_id=None,
                     is_error=True,
                     elapsed_ms=0.0,
+                    input_units=input_units,
                 )
                 continue
             started_at = time.perf_counter()
@@ -339,7 +448,7 @@ def main() -> None:
                 expected_nonce=expected_nonce,
             )
             elapsed_ms = (time.perf_counter() - started_at) * 1000.0
-            if isinstance(result, str) and result.startswith("Error:"):
+            if _is_domain_error_result(result):
                 print(result)
                 _apply_result_to_session(
                     session,
@@ -348,6 +457,7 @@ def main() -> None:
                     revision_id=None,
                     is_error=True,
                     elapsed_ms=elapsed_ms,
+                    input_units=input_units,
                 )
                 continue
             persist_started = time.perf_counter()
@@ -355,9 +465,18 @@ def main() -> None:
             elapsed_ms += (time.perf_counter() - persist_started) * 1000.0
             print(result)
             print(f"revision_id={rev}")
-            _apply_result_to_session(session, action="transfer", result=result, revision_id=rev, is_error=False, elapsed_ms=elapsed_ms)
+            _apply_result_to_session(
+                session,
+                action="transfer",
+                result=result,
+                revision_id=rev,
+                is_error=False,
+                elapsed_ms=elapsed_ms,
+                input_units=input_units,
+            )
         elif option == "5":
             user_id = _ask("user_id (optional): ")
+            input_units = _measure_units(user_id)
             started_at = time.perf_counter()
             result = ledger.list_wallets(user_id=user_id)
             elapsed_ms = (time.perf_counter() - started_at) * 1000.0
@@ -369,9 +488,11 @@ def main() -> None:
                 revision_id=None,
                 is_error=False,
                 elapsed_ms=elapsed_ms,
+                input_units=input_units,
             )
         elif option == "6":
             wallet_id = _ask("wallet_id (optional): ")
+            input_units = _measure_units(wallet_id)
             started_at = time.perf_counter()
             result = ledger.list_utxos(wallet_id=wallet_id)
             elapsed_ms = (time.perf_counter() - started_at) * 1000.0
@@ -383,8 +504,10 @@ def main() -> None:
                 revision_id=None,
                 is_error=False,
                 elapsed_ms=elapsed_ms,
+                input_units=input_units,
             )
         elif option == "7":
+            input_units = _measure_units("verify-integrity")
             started_at = time.perf_counter()
             result = ledger.verify_transfer_integrity()
             elapsed_ms = (time.perf_counter() - started_at) * 1000.0
@@ -396,8 +519,10 @@ def main() -> None:
                 revision_id=None,
                 is_error=False,
                 elapsed_ms=elapsed_ms,
+                input_units=input_units,
             )
         elif option == "8":
+            input_units = _measure_units("snapshot")
             started_at = time.perf_counter()
             result = ledger.state_snapshot()
             elapsed_ms = (time.perf_counter() - started_at) * 1000.0
@@ -409,15 +534,17 @@ def main() -> None:
                 revision_id=None,
                 is_error=False,
                 elapsed_ms=elapsed_ms,
+                input_units=input_units,
             )
         elif option == "9":
             user_id = _ask("user_id: ")
             wallet_id = _ask("wallet_id: ")
             current_token = _ask("current_token (optional): ")
+            input_units = _measure_units(user_id, wallet_id, current_token)
             started_at = time.perf_counter()
             result = ledger.refresh_wallet_token(user_id, wallet_id, current_token=current_token)
             elapsed_ms = (time.perf_counter() - started_at) * 1000.0
-            if isinstance(result, str) and result.startswith("Error:"):
+            if _is_domain_error_result(result):
                 print(result)
                 _apply_result_to_session(
                     session,
@@ -426,6 +553,7 @@ def main() -> None:
                     revision_id=None,
                     is_error=True,
                     elapsed_ms=elapsed_ms,
+                    input_units=input_units,
                 )
                 continue
             persist_started = time.perf_counter()
@@ -440,10 +568,11 @@ def main() -> None:
                 revision_id=rev,
                 is_error=False,
                 elapsed_ms=elapsed_ms,
+                input_units=input_units,
             )
         elif option == "10":
             started_at = time.perf_counter()
-            result, is_error = _run_transfer_wizard(ledger, session)
+            result, is_error, input_units = _run_transfer_wizard(ledger, session)
             elapsed_ms = (time.perf_counter() - started_at) * 1000.0
             if is_error:
                 print(result)
@@ -454,6 +583,7 @@ def main() -> None:
                     revision_id=None,
                     is_error=True,
                     elapsed_ms=elapsed_ms,
+                    input_units=input_units,
                 )
                 continue
             persist_started = time.perf_counter()
@@ -468,7 +598,10 @@ def main() -> None:
                 revision_id=rev,
                 is_error=False,
                 elapsed_ms=elapsed_ms,
+                input_units=input_units,
             )
+        elif option == "11":
+            _print_session(session)
         elif option == "0":
             print("Bye")
             break
@@ -481,6 +614,7 @@ def main() -> None:
                 revision_id=None,
                 is_error=True,
                 elapsed_ms=0.0,
+                input_units=_measure_units(option),
             )
 
 
