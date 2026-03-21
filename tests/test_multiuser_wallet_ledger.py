@@ -35,3 +35,30 @@ def test_transfer_rejects_insufficient_balance():
 
     error = ledger.transfer("wa", "wb", "2", fee="0")
     assert "Fondos insuficientes" in error or "fondos insuficientes" in error
+
+
+def test_transfer_rejects_when_policy_disallows_sender():
+    ledger = MultiUserWalletLedger()
+    ledger.create_user("u-a", "A")
+    ledger.create_user("u-b", "B")
+    ledger.create_wallet("u-a", wallet_id="wa")
+    ledger.create_wallet("u-b", wallet_id="wb")
+    ledger.mint("wa", "20")
+
+    assert "actualizada" in ledger.set_user_policy("u-a", can_transfer=False)
+    error = ledger.transfer("wa", "wb", "5", fee="0")
+    assert "impide transferencias" in error
+
+
+def test_transfer_rejects_when_daily_limit_is_exceeded():
+    ledger = MultiUserWalletLedger()
+    ledger.create_user("u-a", "A")
+    ledger.create_user("u-b", "B")
+    ledger.create_wallet("u-a", wallet_id="wa")
+    ledger.create_wallet("u-b", wallet_id="wb")
+    ledger.mint("wa", "50")
+
+    assert "actualizada" in ledger.set_user_policy("u-a", daily_limit="10")
+    assert "Transferencia" in ledger.transfer("wa", "wb", "7", fee="0")
+    error = ledger.transfer("wa", "wb", "4", fee="0")
+    assert "límite diario excedido" in error

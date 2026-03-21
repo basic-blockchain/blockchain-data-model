@@ -29,6 +29,15 @@ def _add_json_flag(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--json", dest="cmd_json", action="store_true", help="JSON output mode")
 
 
+def _parse_optional_bool(value: str) -> bool:
+    normalized = str(value).strip().lower()
+    if normalized in {"true", "1", "yes", "y", "on"}:
+        return True
+    if normalized in {"false", "0", "no", "n", "off"}:
+        return False
+    raise argparse.ArgumentTypeError("Valor inválido para booleano. Use true/false.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Multi-user wallet ledger CLI")
     parser.add_argument("--store-file", default=str(DEFAULT_STORE), help="Path to the JSON ledger store")
@@ -79,6 +88,19 @@ def main() -> None:
     _add_json_flag(cmd_revisions)
     cmd_revisions.add_argument("--limit", type=int, default=20)
 
+    cmd_set_policy = subparsers.add_parser("set-policy", help="Set transfer policy for a user")
+    _add_json_flag(cmd_set_policy)
+    cmd_set_policy.add_argument("--user-id", required=True)
+    cmd_set_policy.add_argument("--can-transfer", type=_parse_optional_bool)
+    cmd_set_policy.add_argument("--daily-limit")
+
+    cmd_get_policy = subparsers.add_parser("get-policy", help="Get transfer policy for a user")
+    _add_json_flag(cmd_get_policy)
+    cmd_get_policy.add_argument("--user-id", required=True)
+
+    cmd_list_policies = subparsers.add_parser("list-policies", help="List all user transfer policies")
+    _add_json_flag(cmd_list_policies)
+
     args = parser.parse_args()
     store_file = Path(args.store_file)
     output_json = bool(args.json or getattr(args, "cmd_json", False))
@@ -120,6 +142,19 @@ def main() -> None:
             result = ledger.state_snapshot()
         elif args.command == "list-revisions":
             result = store.list_revisions(limit=args.limit)
+        elif args.command == "set-policy":
+            can_transfer = args.can_transfer if hasattr(args, "can_transfer") else None
+            daily_limit = args.daily_limit if getattr(args, "daily_limit", None) is not None else None
+            result = ledger.set_user_policy(
+                args.user_id,
+                can_transfer=can_transfer,
+                daily_limit=daily_limit,
+            )
+            mutate = True
+        elif args.command == "get-policy":
+            result = ledger.get_user_policy(args.user_id)
+        elif args.command == "list-policies":
+            result = ledger.list_user_policies()
         else:
             result = "Error: command no soportado."
 
