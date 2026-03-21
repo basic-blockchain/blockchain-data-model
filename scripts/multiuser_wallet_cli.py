@@ -69,6 +69,7 @@ def main() -> None:
     cmd_transfer.add_argument("--amount", required=True)
     cmd_transfer.add_argument("--fee", default="0")
     cmd_transfer.add_argument("--reference", default="")
+    cmd_transfer.add_argument("--sender-token", default="")
 
     cmd_balance = subparsers.add_parser("balance", help="Get wallet balance")
     _add_json_flag(cmd_balance)
@@ -148,6 +149,7 @@ def main() -> None:
                 args.amount,
                 fee=args.fee,
                 reference=args.reference,
+                sender_token=args.sender_token,
             )
             mutate = True
         elif args.command == "balance":
@@ -202,7 +204,10 @@ def main() -> None:
         if mutate:
             revision_id = store.save_ledger(ledger)
 
-        success = not (isinstance(result, str) and result.startswith("Error:"))
+        success = not (
+            isinstance(result, str)
+            and (result.startswith("Error:") or result.startswith("Wallet invalida."))
+        )
         if output_json:
             payload = {
                 "success": success,
