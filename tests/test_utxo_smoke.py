@@ -36,3 +36,20 @@ def test_utxo_compliance_pass(utxo_module):
 
     report = chain.audit_compliance("LOT-UTXO-1")
     assert report["status"] == "PASS"
+
+
+def test_utxo_compliance_profile_for_cacao(utxo_module):
+    chain = utxo_module.UTXO_Blockchain()
+    chain.register_lot("LOT-UTXO-CACAO", "owner", "CACAO", "Tumaco", 100)
+    chain.issue_certificate("LOT-UTXO-CACAO", "Origen", "INVIMA")
+    chain.record_logistics_event("LOT-UTXO-CACAO", "COSECHA", "Finca", "Tumaco")
+    chain.record_logistics_event(
+        "LOT-UTXO-CACAO", "FERMENTACION", "Planta", "Tumaco"
+    )
+    chain.record_logistics_event(
+        "LOT-UTXO-CACAO", "EXPORTACION", "Puerto", "Buenaventura"
+    )
+
+    report = chain.audit_compliance("LOT-UTXO-CACAO")
+    assert report["status"] == "PASS"
+    assert "FERMENTACION" in report["required_events"]

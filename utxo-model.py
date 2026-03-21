@@ -73,6 +73,8 @@ class TraceabilityLot:
     certificate_ids: list[str]
     event_ids: list[str]
     compliance_status: str = "PENDING"
+    required_events: list[str] | None = None
+    min_active_certificates: int = 1
 
 
 @dataclass
@@ -114,6 +116,20 @@ class UTXO_Blockchain:
         self.lots = {}
         self.certificates = {}
         self.logistics_events = {}
+        self.compliance_profiles = {
+            "DEFAULT": {
+                "required_events": ["COSECHA", "PROCESAMIENTO", "EXPORTACION"],
+                "min_active_certificates": 1,
+            },
+            "CAFE": {
+                "required_events": ["COSECHA", "PROCESAMIENTO", "EXPORTACION"],
+                "min_active_certificates": 1,
+            },
+            "CACAO": {
+                "required_events": ["COSECHA", "FERMENTACION", "EXPORTACION"],
+                "min_active_certificates": 1,
+            },
+        }
         self._create_genesis_block()
 
     def _timestamp(self):
@@ -201,6 +217,20 @@ class UTXO_Blockchain:
 
     def _validate_participant(self, participant):
         return isinstance(participant, str) and participant.strip() != ""
+
+    def configure_compliance_profile(self, profile_name, required_events, min_active_certificates=1):
+        if not self._validate_participant(profile_name):
+            return "Error: profile_name inválido."
+        if not required_events or not all(self._validate_participant(item) for item in required_events):
+            return "Error: required_events inválido."
+        if min_active_certificates < 1:
+            return "Error: min_active_certificates debe ser >= 1."
+
+        self.compliance_profiles[profile_name.upper()] = {
+            "required_events": [item.upper() for item in required_events],
+            "min_active_certificates": int(min_active_certificates),
+        }
+        return f"Perfil de compliance {profile_name.upper()} configurado."
 
     def get_balance(self, owner):
         return sum(
@@ -423,6 +453,12 @@ class UTXO_Blockchain:
         ]):
             return "Error: Datos inválidos para registrar lote."
 
+        profile_key = product.strip().upper()
+        profile = self.compliance_profiles.get(
+            profile_key,
+            self.compliance_profiles["DEFAULT"],
+        )
+
         self.lots[lot_id] = TraceabilityLot(
             lot_id=lot_id,
             product=product,
@@ -431,6 +467,8 @@ class UTXO_Blockchain:
             created_at=self._timestamp(),
             certificate_ids=[],
             event_ids=[],
+            required_events=profile["required_events"],
+            min_active_certificates=profile["min_active_certificates"],
         )
         return self.mint_initial_coins(
             initial_amount,
@@ -510,7 +548,7 @@ class UTXO_Blockchain:
 
         events = [self.logistics_events[eid] for eid in lot.event_ids]
         event_types = {event.event_type for event in events}
-        required_events = {"COSECHA", "PROCESAMIENTO", "EXPORTACION"}
+        required_events = set(lot.required_events or self.compliance_profiles["DEFAULT"]["required_events"])
         has_required_events = required_events.issubset(event_types)
 
         active_certificates = []
@@ -522,7 +560,7 @@ class UTXO_Blockchain:
             if datetime.fromisoformat(cert.valid_until) >= now:
                 active_certificates.append(cert)
 
-        compliant = has_required_events and len(active_certificates) > 0
+        compliant = has_required_events and len(active_certificates) >= lot.min_active_certificates
         lot.compliance_status = "PASS" if compliant else "FAIL"
 
         return {
@@ -530,6 +568,8 @@ class UTXO_Blockchain:
             "status": lot.compliance_status,
             "has_required_events": has_required_events,
             "active_certificates": len(active_certificates),
+            "required_events": sorted(required_events),
+            "min_active_certificates": lot.min_active_certificates,
             "owner": lot.owner,
         }
 
