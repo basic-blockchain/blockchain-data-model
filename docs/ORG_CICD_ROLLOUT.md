@@ -21,12 +21,14 @@ jobs:
 ```
 
 ## Branch governance baseline
-- Protected branches: `main`, `develop`, `production`
+- Protected branches: `production`, `main`, `staging`, `qa`, `develop`
 - Required checks: `CI Pull Request / ci`
 - Required reviews:
-  - `main`: 2
-  - `develop`: 1
   - `production`: 2
+  - `main`: 2
+  - `staging`: 1
+  - `qa`: 1
+  - `develop`: 1
 - Require CODEOWNERS review
 - Dismiss stale approvals
 - Block direct pushes to `production`
@@ -51,6 +53,56 @@ jobs:
   - `scripts/bootstrap_github_rules.sh`
 - Organization-wide setup:
   - `scripts/bootstrap_org_rules.sh`
+- Unified org CLI (bootstrap + audit + promotion PR):
+  - `scripts/devsecops_org_cli.sh`
+- Batch onboarding report (pre/post snapshot):
+  - `scripts/devsecops_org_onboarding.sh`
+
+## GitHub CLI operational model
+Use `gh` as the standard control plane for organization-wide DevSecOps operations.
+
+Pre-requisites:
+- `gh` installed and authenticated (`gh auth login`)
+- Admin permissions for repository branch protection updates
+
+Recommended lifecycle:
+1. Run `audit` to detect missing branches/protections.
+2. Run `bootstrap` in `DRY_RUN=true` mode to validate intended actions.
+3. Run `bootstrap` without dry-run to apply protections in bulk.
+4. Use `promote-pr` for manual promotions when needed.
+5. Run `onboard` to generate pre/post evidence reports.
+
+Core commands:
+
+```bash
+bash scripts/devsecops_org_cli.sh audit basic-blockchain
+DRY_RUN=true bash scripts/devsecops_org_cli.sh bootstrap basic-blockchain
+bash scripts/devsecops_org_cli.sh bootstrap basic-blockchain
+bash scripts/devsecops_org_cli.sh promote-pr basic-blockchain blockchain-data-model qa develop
+APPLY_CHANGES=true bash scripts/devsecops_org_cli.sh onboard basic-blockchain
+```
+
+## Onboarding evidence reports
+- The onboarding script exports CSV and summary files under `reports/devsecops/`.
+- Report includes both phases:
+  - `pre`: status before applying controls
+  - `post`: status after applying controls
+- Useful for compliance evidence and change management records.
+
+Direct onboarding command:
+
+```bash
+APPLY_CHANGES=false bash scripts/devsecops_org_onboarding.sh basic-blockchain
+APPLY_CHANGES=true bash scripts/devsecops_org_onboarding.sh basic-blockchain "repo-a,repo-b"
+```
+
+Optional bootstrap tuning:
+
+```bash
+REQUIRED_CHECK="CI Pull Request / ci" \
+MAIN_APPROVALS=2 DEVELOP_APPROVALS=1 PRODUCTION_APPROVALS=2 STAGING_APPROVALS=1 QA_APPROVALS=1 \
+bash scripts/devsecops_org_cli.sh bootstrap basic-blockchain
+```
 
 ## Local collaboration guardrails
 - This repository includes `.githooks/pre-push` to block direct local pushes to `production`.
@@ -66,6 +118,8 @@ chmod +x .githooks/pre-push .githooks/commit-msg
 bash scripts/bootstrap_github_rules.sh basic-blockchain blockchain-data-model
 bash scripts/bootstrap_org_rules.sh basic-blockchain
 bash scripts/bootstrap_org_rules.sh basic-blockchain "repo-a,repo-b" "CI Pull Request / ci"
+bash scripts/devsecops_org_cli.sh audit basic-blockchain
+bash scripts/devsecops_org_cli.sh promote-pr basic-blockchain blockchain-data-model production main
 ```
 
 ## Notes
