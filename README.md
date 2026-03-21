@@ -11,8 +11,8 @@ MVP for comparing two blockchain data models in Python:
 The project includes realistic simulation scenarios, JSON persistence per model, compliance/traceability events, and basic observability metrics.
 
 Current release line:
-- Latest stable release: `v1.2.0`
-- Next major target: `v2.0.0` (dual-model architecture consolidation)
+- Latest stable release: `v2.0.0`
+- Next target: `v2.1.0`
 
 ## Quick Start
 
@@ -96,7 +96,7 @@ Release command example:
 ```bash
 git checkout main
 git pull --ff-only origin main
-RELEASE_TAG=v1.2.0
+RELEASE_TAG=v2.0.0
 git tag -a "$RELEASE_TAG" -m "Release $RELEASE_TAG"
 git push origin "$RELEASE_TAG"
 gh release create "$RELEASE_TAG" --repo basic-blockchain/blockchain-data-model --title "$RELEASE_TAG" --notes-file "docs/releases/$RELEASE_TAG.md"
