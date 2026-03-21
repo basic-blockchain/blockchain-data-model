@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import io
 import json
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 import sys
 import time
+
+if sys.stdout.encoding and sys.stdout.encoding.lower().replace("-", "") != "utf8":
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_STORE = ROOT / "data" / "multiuser" / "wallet-ledger.json"
@@ -91,31 +96,41 @@ def _wrap_box(text: str, width: int = W) -> list[str]:
 
 # ── Banner ───────────────────────────────────────────────
 
-BANNER = r"""
-       ___       ___       ___       ___       ___       ___
-      /\  \     /\__\     /\  \     /\  \     /\__\     /\  \
-     /::\  \   /::L_L_   /::\  \   _\:\  \   /:| _|_   /::\  \
-    /::\:\__\ /:/L:\__\ /::\:\__\ /\/::\__\ /::|/\__\ /\:\:\__\
-    \:\:\/  / \/_/:/  / \:\::/  / \::/\/__/ \/|::/  / \:\:\/__/
-     \:\/  /    /:/  /   \::/  /   \:\__\     |:/  /   \:\/  /
-      \/__/     \/__/     \/__/     \/__/     \/__/     \/__/
-"""
-
-LOGO_LINES = [
-    "   ╭─────────────────────────────────────────────╮",
-    "   │         ₿  BLOCKCHAIN WALLET SYSTEM         │",
-    "   │         ── Multiuser Terminal v2.3 ──        │",
-    "   ╰─────────────────────────────────────────────╯",
-]
-
-
 def _print_banner() -> None:
-    print(_cyan(BANNER))
-    for line in LOGO_LINES:
-        print(_yellow(line))
+    btc = [
+        "       ▄▄████▄▄       ",
+        "     ▄██▀▀▀▀▀▀██▄     ",
+        "    ██▀  ▄██▄  ▀██    ",
+        "   ██   ██  ██▌  ██   ",
+        "   ██   ▀██▄▄▄  ▄██   ",
+        "   ██    ▄▄▄██▌ ▀██   ",
+        "   ██   ██▌ ██   ██   ",
+        "    ██▄  ▀██▀  ▄██    ",
+        "     ▀██▄▄▄▄▄▄██▀     ",
+        "       ▀▀████▀▀       ",
+    ]
+    title = [
+        "",
+        " ██████╗██╗  ██╗ █████╗ ██╗███╗  ██╗███████╗",
+        "██╔════╝██║  ██║██╔══██╗██║████╗ ██║██╔════╝",
+        "██║     ███████║███████║██║██╔██╗██║███████╗ ",
+        "██║     ██╔══██║██╔══██║██║██║╚████║╚════██║ ",
+        "╚██████╗██║  ██║██║  ██║██║██║ ╚███║███████║ ",
+        " ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝╚═╝  ╚══╝╚══════╝ ",
+        "",
+        " ₿  B L O C K C H A I N   W A L L E T   S Y S T E M",
+        " ── Multiuser Terminal v2.3 ──",
+    ]
+
+    max_lines = max(len(btc), len(title))
+    for i in range(max_lines):
+        left = btc[i] if i < len(btc) else " " * 22
+        right = title[i] if i < len(title) else ""
+        print(f"  {_yellow(left)}  {_cyan(right)}")
+
     print()
-    print(_dim("  UTXO & Account-based models • JSON / PostgreSQL persistence"))
-    print(_dim("  Type the option number and press Enter. Type 0 to exit."))
+    print(_dim("  UTXO & Account-based models  •  JSON / PostgreSQL persistence"))
+    print(_dim("  Ingresa el numero de opcion y presiona Enter. Escribe 0 para salir."))
     print()
 
 
