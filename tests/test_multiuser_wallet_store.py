@@ -115,3 +115,31 @@ def test_store_load_infers_wallet_nonce_for_legacy_transfers(tmp_path):
     ledger = store.load_ledger()
 
     assert ledger.current_wallet_nonce("wallet_user_alpha_01") == 2
+
+
+def test_store_roundtrip_with_utxo_wallets(tmp_path):
+    store_file: Path = tmp_path / "wallet-ledger.json"
+    store = JsonMultiUserWalletStore(store_file)
+
+    ledger = MultiUserWalletLedger()
+    ledger.create_user("u-1", "User One")
+    ledger.create_user("u-2", "User Two")
+    created_u1 = ledger.create_wallet("u-1", wallet_id="wallet_user_alpha_01", model="UTXO")
+    ledger.create_wallet("u-2", wallet_id="wallet_user_bravo_02", model="UTXO")
+    ledger.mint("wallet_user_alpha_01", "10")
+    ledger.transfer(
+        "wallet_user_alpha_01",
+        "wallet_user_bravo_02",
+        "3",
+        fee="1",
+        sender_token=created_u1["auth_token"],
+    )
+
+    store.save_ledger(ledger)
+    loaded = store.load_ledger()
+
+    assert loaded.get_wallet_balance("wallet_user_alpha_01") == loaded.wallets["wallet_user_alpha_01"].balance
+    assert loaded.wallets["wallet_user_alpha_01"].model == "UTXO"
+    assert loaded.wallets["wallet_user_bravo_02"].model == "UTXO"
+    assert loaded.get_wallet_balance("wallet_user_alpha_01").to_eng_string() == "6.00000000"
+    assert loaded.get_wallet_balance("wallet_user_bravo_02").to_eng_string() == "3.00000000"

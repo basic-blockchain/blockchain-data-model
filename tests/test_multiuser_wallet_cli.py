@@ -575,3 +575,87 @@ def test_cli_verify_integrity_reports_valid_chain(tmp_path):
     payload = json.loads(out.stdout)
     assert payload["success"] is True
     assert payload["result"]["valid"] is True
+
+
+def test_cli_utxo_model_transfer_and_list_utxos(tmp_path):
+    repo_root = Path(__file__).resolve().parents[1]
+    store_file = tmp_path / "wallet-ledger.json"
+
+    assert _run_cli(
+        ["--store-file", str(store_file), "create-user", "--user-id", "u1", "--display-name", "User One"],
+        cwd=repo_root,
+    ).returncode == 0
+    assert _run_cli(
+        ["--store-file", str(store_file), "create-user", "--user-id", "u2", "--display-name", "User Two"],
+        cwd=repo_root,
+    ).returncode == 0
+
+    wallet = _run_cli(
+        [
+            "--store-file",
+            str(store_file),
+            "create-wallet",
+            "--user-id",
+            "u1",
+            "--wallet-id",
+            "wallet_user_alpha_01",
+            "--model",
+            "UTXO",
+            "--json",
+        ],
+        cwd=repo_root,
+    )
+    assert wallet.returncode == 0
+    token_u1 = json.loads(wallet.stdout)["result"]["auth_token"]
+
+    assert _run_cli(
+        [
+            "--store-file",
+            str(store_file),
+            "create-wallet",
+            "--user-id",
+            "u2",
+            "--wallet-id",
+            "wallet_user_bravo_02",
+            "--model",
+            "UTXO",
+            "--json",
+        ],
+        cwd=repo_root,
+    ).returncode == 0
+
+    assert _run_cli(
+        ["--store-file", str(store_file), "mint", "--wallet-id", "wallet_user_alpha_01", "--amount", "10"],
+        cwd=repo_root,
+    ).returncode == 0
+
+    transfer = _run_cli(
+        [
+            "--store-file",
+            str(store_file),
+            "transfer",
+            "--from-wallet",
+            "wallet_user_alpha_01",
+            "--to-wallet",
+            "wallet_user_bravo_02",
+            "--amount",
+            "3",
+            "--fee",
+            "1",
+            "--sender-token",
+            token_u1,
+            "--json",
+        ],
+        cwd=repo_root,
+    )
+    assert transfer.returncode == 0
+
+    utxos = _run_cli(
+        ["--store-file", str(store_file), "list-utxos", "--wallet-id", "wallet_user_bravo_02", "--json"],
+        cwd=repo_root,
+    )
+    assert utxos.returncode == 0
+    payload = json.loads(utxos.stdout)
+    assert payload["success"] is True
+    assert len(payload["result"]) == 1
+    assert payload["result"][0]["amount"] == "3.00000000"
