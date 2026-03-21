@@ -81,14 +81,15 @@ Release notes policy:
 	- `Validation`
 	- `Next`
 
-Patch release command set:
+Release command set:
 
 ```bash
 git checkout main
 git pull --ff-only origin main
-git tag -a v1.0.1 -m "Patch release v1.0.1"
-git push origin v1.0.1
-gh release create v1.0.1 --repo basic-blockchain/blockchain-data-model --title "v1.0.1" --notes-file docs/releases/v1.0.1.md
+RELEASE_TAG=v1.2.0
+git tag -a "$RELEASE_TAG" -m "Release $RELEASE_TAG"
+git push origin "$RELEASE_TAG"
+gh release create "$RELEASE_TAG" --repo basic-blockchain/blockchain-data-model --title "$RELEASE_TAG" --notes-file "docs/releases/$RELEASE_TAG.md"
 ```
 
 Release note template:
