@@ -41,6 +41,30 @@
 - Organization-wide protections (all repos or selected repos):
 	- `scripts/bootstrap_org_rules.sh`
 
+## Delivery automation (no repetitive manual chain)
+To avoid repeating the full release and promotion sequence manually on every cycle,
+use the one-command automation script:
+
+```bash
+bash scripts/devsecops_release_and_promote.sh basic-blockchain blockchain-data-model develop
+```
+
+What this command does:
+- creates `release/*` from `develop`
+- opens and merges `release/* -> production`
+- creates and merges promotion PRs for:
+	- `production -> main`
+	- `production -> staging`
+	- `staging -> qa`
+	- `qa -> develop`
+- retries merges while required checks are still running
+
+Optional env vars:
+- `RELEASE_PREFIX` (default: `release/auto`)
+- `MAX_WAIT_SECONDS` (default: `1800`)
+- `POLL_SECONDS` (default: `15`)
+- `GH_BIN` (explicit path for GitHub CLI)
+
 Examples:
 
 ```bash
