@@ -60,6 +60,19 @@ Directorio personalizado de persistencia:
 py scripts/blockchain_models_simulator.py --scenario coffee-export --model account --persist --store-dir data/my-runs
 ```
 
+## Métricas por corrida
+Cada resultado incorpora métricas para observabilidad técnica y futura exposición por API:
+- `execution_ms`
+- `total_events`
+- `total_transactions`
+- `pending_transactions`
+- `confirmed_transactions`
+- `finalized_transactions`
+- `chain_height`
+- `state_items`
+
+En modo `--json`, estas métricas viajan dentro de cada elemento de `results`.
+
 ## Nota sobre el módulo de observabilidad
 El módulo de observabilidad de agentes (`scripts/dev_team_console.py`) se mantiene como plus/MVP opcional.
 No es el núcleo del sistema de simulación de modelos blockchain.
