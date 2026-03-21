@@ -58,6 +58,97 @@ Run tests:
 py -m pytest -q
 ```
 
+## Operational Runbook (v2)
+
+Run from repository root.
+
+### Terminal startup (Windows)
+
+Use either Git Bash or PowerShell, but always run commands from repository root.
+
+```bash
+# 1) Move to repository root
+cd /c/Users/User/Documents/sapir/blockchain_usb/scripts/python/blockchain-data-model
+
+# 2) Verify Python launcher is available
+py --version
+
+# 3) (Optional) reset persisted data before a fresh run
+bash scripts/reset_persistence_json.sh
+
+# 4) Quick health check for CLI availability
+py scripts/multiuser_wallet_cli.py --help
+```
+
+If `py` is not available in your shell, open a terminal profile where Python Launcher is configured.
+
+### Normal mode (CLI)
+
+```bash
+# 0) Optional: validate key multiuser tests
+py -m pytest -q tests/test_multiuser_wallet_ledger.py tests/test_multiuser_wallet_cli.py tests/test_multiuser_wallet_store.py
+
+# 1) Comparative simulation (JSON)
+py scripts/blockchain_models_simulator.py --scenario coffee-export --model both --json
+
+# 2) Create users
+py scripts/multiuser_wallet_cli.py --store-file data/multiuser/wallet-ledger.json create-user --user-id u-alice --display-name Alice --json
+py scripts/multiuser_wallet_cli.py --store-file data/multiuser/wallet-ledger.json create-user --user-id u-bob --display-name Bob --json
+
+# 3) Create UTXO wallets
+py scripts/multiuser_wallet_cli.py --store-file data/multiuser/wallet-ledger.json create-wallet --user-id u-alice --wallet-id wallet_user_alpha_01 --model UTXO --json
+py scripts/multiuser_wallet_cli.py --store-file data/multiuser/wallet-ledger.json create-wallet --user-id u-bob --wallet-id wallet_user_bravo_02 --model UTXO --json
+
+# 4) Mint funds
+py scripts/multiuser_wallet_cli.py --store-file data/multiuser/wallet-ledger.json mint --wallet-id wallet_user_alpha_01 --amount 10 --json
+
+# 5) Transfer with sender token + expected nonce
+py scripts/multiuser_wallet_cli.py --store-file data/multiuser/wallet-ledger.json transfer --from-wallet wallet_user_alpha_01 --to-wallet wallet_user_bravo_02 --amount 3 --fee 1 --sender-token TOKEN_DE_ALICE --expected-nonce 1 --json
+
+# 6) If token mismatch/expiration happens, renew token as owner
+py scripts/multiuser_wallet_cli.py --store-file data/multiuser/wallet-ledger.json refresh-token --user-id u-alice --wallet-id wallet_user_alpha_01 --current-token TOKEN_ANTERIOR --json
+
+# 7) Inspect resulting UTXOs/snapshot
+py scripts/multiuser_wallet_cli.py --store-file data/multiuser/wallet-ledger.json list-utxos --wallet-id wallet_user_bravo_02 --json
+py scripts/multiuser_wallet_cli.py --store-file data/multiuser/wallet-ledger.json snapshot --json
+
+# 8) Verify nonce + hash-chain integrity
+py scripts/multiuser_wallet_cli.py --store-file data/multiuser/wallet-ledger.json verify-integrity --json
+
+# 9) Verify branch content alignment (DevSecOps guard)
+bash scripts/devsecops_check_content_sync.sh
+```
+
+Notes:
+- Copy `auth_token` from wallet creation output and use it as `--sender-token`.
+- If transfer returns token expiration/mismatch, call `refresh-token` and retry with the new token.
+
+### Interactive terminal mode
+
+```bash
+py scripts/multiuser_terminal.py
+```
+
+Recommended menu sequence:
+- `1) create-user` (Alice)
+- `1) create-user` (Bob)
+- `2) create-wallet` (Alice, model `UTXO`)
+- `2) create-wallet` (Bob, model `UTXO`)
+- `3) mint` (Alice)
+- `4) transfer` (use Alice token + expected nonce)
+- `6) list-utxos` (Bob)
+- `7) verify-integrity`
+- `8) snapshot`
+- `9) refresh-token` (owner recovery flow when token expired/mismatch)
+
+### Reset persistence data
+
+Use the repository script to reset JSON stores to minimal valid state:
+
+```bash
+bash scripts/reset_persistence_json.sh
+```
+
 ## Core Structure
 
 - account-model.py: account-based blockchain model.
