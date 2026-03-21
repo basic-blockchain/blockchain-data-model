@@ -6,6 +6,7 @@ data/multiuser/*.json
 /utxo-runs.json
 /account-runs.json
 /wallet-ledger.json
+.env
 .claude/
 CLAUDE.md
 AGENTS.md
