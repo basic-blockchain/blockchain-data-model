@@ -6,9 +6,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from domain.multiuser_wallet_ledger import MultiUserWalletLedger
+from persistence.interfaces import WalletLedgerRepository
 
 
-class JsonMultiUserWalletStore:
+class JsonMultiUserWalletStore(WalletLedgerRepository):
     def __init__(self, file_path: Path):
         self.file_path = Path(file_path)
 
