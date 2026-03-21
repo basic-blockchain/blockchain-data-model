@@ -12,6 +12,7 @@ def test_store_roundtrip(tmp_path):
     ledger.create_user("u-1", "User One")
     ledger.create_wallet("u-1", wallet_id="w-1")
     ledger.mint("w-1", "10")
+    ledger.set_user_policy("u-1", can_transfer=False, daily_limit="25")
 
     revision_id = store.save_ledger(ledger)
     assert revision_id.startswith("rev-")
@@ -22,6 +23,8 @@ def test_store_roundtrip(tmp_path):
     assert len(snapshot["users"]) == 1
     assert len(snapshot["wallets"]) == 1
     assert snapshot["wallets"][0]["balance"] == "10.00000000"
+    assert snapshot["policies"][0]["can_transfer"] is False
+    assert snapshot["policies"][0]["daily_limit"] == "25.00000000"
 
     revisions = store.list_revisions(limit=5)
     assert len(revisions) == 1
