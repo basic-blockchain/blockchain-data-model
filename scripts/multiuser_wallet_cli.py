@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import sys
 from pathlib import Path
@@ -11,23 +12,64 @@ DEFAULT_STORE = ROOT / "data" / "multiuser" / "wallet-ledger.json"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+if sys.stderr.encoding and sys.stderr.encoding.lower().replace("-", "") != "utf8":
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+if sys.stdout.encoding and sys.stdout.encoding.lower().replace("-", "") != "utf8":
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+
 from domain.multiuser_wallet_ledger import MultiUserWalletLedger
 from persistence.factory import create_wallet_store
 from persistence.interfaces import WalletLedgerRepository
 
 
+# ── ANSI helpers ─────────────────────────────────────────
+
 def _supports_ansi() -> bool:
     return sys.stdout.isatty() and sys.stderr.isatty()
 
 
-def _style(text: str, code: str) -> str:
+def _s(text: str, code: str) -> str:
     if not _supports_ansi():
         return text
     return f"\033[{code}m{text}\033[0m"
 
 
+def _dim(t: str) -> str: return _s(t, "2")
+def _bold(t: str) -> str: return _s(t, "1")
+def _cyan(t: str) -> str: return _s(t, "1;36")
+def _green(t: str) -> str: return _s(t, "1;32")
+def _red(t: str) -> str: return _s(t, "1;31")
+def _yellow(t: str) -> str: return _s(t, "1;33")
+
+
+# ── Box drawing ──────────────────────────────────────────
+
+W = 72
+
+
+def _box_top() -> str:
+    return f"\u2554{'\u2550' * (W + 2)}\u2557"
+
+
+def _box_mid() -> str:
+    return f"\u2560{'\u2550' * (W + 2)}\u2563"
+
+
+def _box_bot() -> str:
+    return f"\u255a{'\u2550' * (W + 2)}\u255d"
+
+
+def _box_line(text: str = "") -> str:
+    stripped = text
+    for code in ("1;36", "1;32", "1;31", "1;33", "1;34", "1;35", "1;37", "0;33", "0;37", "1", "2"):
+        stripped = stripped.replace(f"\033[{code}m", "").replace("\033[0m", "")
+    pad = W - len(stripped)
+    if pad < 0:
+        pad = 0
+    return f"\u2551 {text}{' ' * pad} \u2551"
+
+
 def _wrap_lines(text: str, width: int) -> list[str]:
-    """Break text into lines that fit within the given width."""
     if len(text) <= width:
         return [text]
     lines: list[str] = []
@@ -43,21 +85,62 @@ def _wrap_lines(text: str, width: int) -> list[str]:
     return lines
 
 
-def _print_alert(kind: str, title: str, message: str | None = None, *, stream=None) -> None:
-    color = "1;31" if kind == "ERROR" else "1;32"
-    out = stream if stream is not None else sys.stdout
-    header = f"[{kind}] {title}"
-    inner_width = 74
-    border = _style("+" + "-" * (inner_width + 2) + "+", color)
-    print(border, file=out)
-    for line in _wrap_lines(header, inner_width):
-        print(_style(f"| {line:<{inner_width}} |", color), file=out)
-    if message:
-        body = f"Mensaje: {message}"
-        for line in _wrap_lines(body, inner_width):
-            print(_style(f"| {line:<{inner_width}} |", color), file=out)
-    print(border, file=out)
+# ── Alert & data output ─────────────────────────────────
 
+def _print_alert(kind: str, title: str, message: str | None = None, *, stream=None) -> None:
+    color_fn = _red if kind == "ERROR" else _green
+    icon = "\u2717" if kind == "ERROR" else "\u2713"
+    out = stream if stream is not None else sys.stdout
+    header = f"  {icon} [{kind}] {title}"
+
+    print(color_fn(_box_top()), file=out)
+    for line in _wrap_lines(header, W):
+        print(color_fn(_box_line(line)), file=out)
+    if message:
+        print(color_fn(_box_mid()), file=out)
+        for line in _wrap_lines(f"  {message}", W):
+            print(color_fn(_box_line(line)), file=out)
+    print(color_fn(_box_bot()), file=out)
+
+
+def _print_data_box(title: str, data, revision_id: str = "", *, stream=None) -> None:
+    out = stream if stream is not None else sys.stderr
+    print(file=out)
+    print(_box_top(), file=out)
+    print(_box_line(_cyan(f"  {title}")), file=out)
+    print(_box_mid(), file=out)
+
+    if isinstance(data, dict):
+        for key, val in data.items():
+            val_str = str(val)
+            max_val = W - 22
+            if len(val_str) > max_val:
+                val_str = val_str[:max_val - 3] + "..."
+            print(_box_line(f"  {_dim(key + ':'):<22} {_bold(val_str)}"), file=out)
+    elif isinstance(data, list) and data and isinstance(data[0], dict):
+        for i, item in enumerate(data[:10]):
+            if i > 0:
+                print(_box_line(_dim("  " + "\u2500" * (W - 4))), file=out)
+            for key, val in item.items():
+                val_str = str(val)
+                max_val = W - 22
+                if len(val_str) > max_val:
+                    val_str = val_str[:max_val - 3] + "..."
+                print(_box_line(f"  {_dim(key + ':'):<22} {val_str}"), file=out)
+        if len(data) > 10:
+            print(_box_line(_dim(f"  ... y {len(data) - 10} mas")), file=out)
+    elif isinstance(data, str):
+        for line in _wrap_lines(f"  {data}", W):
+            print(_box_line(line), file=out)
+
+    if revision_id:
+        print(_box_mid(), file=out)
+        print(_box_line(_dim(f"  revision: {revision_id}")), file=out)
+
+    print(_box_bot(), file=out)
+
+
+# ── Utilities ────────────────────────────────────────────
 
 def _wants_json_from_argv() -> bool:
     return "--json" in sys.argv[1:]
@@ -117,8 +200,10 @@ def _parse_optional_bool(value: str) -> bool:
         return True
     if normalized in {"false", "0", "no", "n", "off"}:
         return False
-    raise argparse.ArgumentTypeError("Valor inválido para booleano. Use true/false.")
+    raise argparse.ArgumentTypeError("Valor invalido para booleano. Use true/false.")
 
+
+# ── Main ─────────────────────────────────────────────────
 
 def main() -> None:
     parser = CliArgumentParser(description="Multi-user wallet ledger CLI")
@@ -327,11 +412,10 @@ def main() -> None:
         )
         if isinstance(result, dict) and "valid" in result and not bool(result["valid"]):
             success = False
+
         if output_json:
-            if not success:
-                _print_alert("ERROR", args.command, _compact_alert_message(result), stream=sys.stderr)
-            else:
-                _print_alert("SUCCESS", args.command, _compact_alert_message(result), stream=sys.stderr)
+            kind = "SUCCESS" if success else "ERROR"
+            _print_alert(kind, args.command, _compact_alert_message(result), stream=sys.stderr)
             payload = {
                 "success": success,
                 "result": result,
@@ -341,10 +425,13 @@ def main() -> None:
             _print_json(payload)
             sys.exit(0 if success else 1)
 
+        # Non-JSON visual output
         if success:
             _print_alert("SUCCESS", args.command, _compact_alert_message(result))
-            if revision_id:
-                print(f"revision_id={revision_id}")
+            if isinstance(result, dict):
+                _print_data_box(args.command, result, revision_id, stream=sys.stdout)
+            elif isinstance(result, list) and result:
+                _print_data_box(f"{args.command} ({len(result)} items)", result, stream=sys.stdout)
         else:
             _print_alert("ERROR", args.command, _compact_alert_message(result), stream=sys.stderr)
         sys.exit(0 if success else 1)
