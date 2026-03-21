@@ -26,8 +26,8 @@ jobs:
           fi
 
           if [[ "$base" == "main" ]]; then
-            if [[ ! "$head" =~ ^release/ ]] && [[ ! "$head" =~ ^hotfix/ ]] && [[ "$head" != "develop" ]]; then
-              echo "PR to main must come from develop, release/*, or hotfix/* branches." >&2
+            if [[ ! "$head" =~ ^release/ ]] && [[ ! "$head" =~ ^hotfix/ ]] && [[ "$head" != "develop" ]] && [[ "$head" != "production" ]]; then
+              echo "PR to main must come from production, develop, release/*, or hotfix/* branches." >&2
               exit 1
             fi
           fi
