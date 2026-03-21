@@ -16,23 +16,27 @@ from persistence.simulation_store import JsonSimulationStore
 _has_psycopg2 = importlib.util.find_spec("psycopg2") is not None
 
 
+@patch.dict(os.environ, {"PERSISTENCE_BACKEND": "json"})
 def test_create_wallet_store_json_default(tmp_path):
     store = create_wallet_store(json_path=tmp_path / "ledger.json")
     assert isinstance(store, JsonMultiUserWalletStore)
     assert isinstance(store, WalletLedgerRepository)
 
 
+@patch.dict(os.environ, {"PERSISTENCE_BACKEND": "json"})
 def test_create_simulation_store_json_default(tmp_path):
     store = create_simulation_store(json_path=tmp_path / "runs.json")
     assert isinstance(store, JsonSimulationStore)
     assert isinstance(store, SimulationRunRepository)
 
 
+@patch.dict(os.environ, {"PERSISTENCE_BACKEND": "json"})
 def test_create_wallet_store_json_requires_path():
     with pytest.raises(ValueError, match="json_path is required"):
         create_wallet_store(json_path=None)
 
 
+@patch.dict(os.environ, {"PERSISTENCE_BACKEND": "json"})
 def test_create_simulation_store_json_requires_path():
     with pytest.raises(ValueError, match="json_path is required"):
         create_simulation_store(json_path=None)
