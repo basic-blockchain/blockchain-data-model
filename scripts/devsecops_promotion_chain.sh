@@ -53,7 +53,7 @@ create_promotion_pr() {
   local target="$2"
 
   local existing
-  existing="$("${GH_BIN}" pr list --repo "${ORG}/${REPO}" --state open --base "$target" --head "$source" --json number --jq '.[0].number // empty')"
+    existing="$("${GH_BIN}" pr list --repo "${ORG}/${REPO}" --state open --base "$target" --head "$source" --json number --jq '.[0].number // empty')"
   if [[ -n "$existing" ]]; then
     echo "Open PR already exists: #${existing} (${source} -> ${target})"
     return
@@ -67,12 +67,30 @@ create_promotion_pr() {
     return
   fi
 
-  "${GH_BIN}" pr create \
+  local output
+  set +e
+    output="$("${GH_BIN}" pr create \
     --repo "${ORG}/${REPO}" \
     --base "$target" \
     --head "$source" \
     --title "$title" \
-    --body "$body"
+    --body "$body" 2>&1)"
+  local status=$?
+  set -e
+
+  if [[ $status -eq 0 ]]; then
+    echo "$output"
+    return
+  fi
+
+  # This is expected when source has no new commits compared with target.
+  if [[ "$output" == *"No commits between"* ]]; then
+    echo "No commits to promote (${source} -> ${target}). Skipping."
+    return
+  fi
+
+  echo "$output" >&2
+  return "$status"
 }
 
 # Promotion chain:
