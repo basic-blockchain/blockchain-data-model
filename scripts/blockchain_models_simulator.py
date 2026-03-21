@@ -8,6 +8,7 @@ import sys
 from dataclasses import asdict, is_dataclass
 from decimal import Decimal
 from pathlib import Path
+from time import perf_counter
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -117,7 +118,33 @@ def print_runs_summary(runs: list[dict]) -> None:
         )
 
 
+def _count_by_status(transactions: list[dict], status: str) -> int:
+    return sum(1 for tx in transactions if str(tx.get("status", "")).upper() == status.upper())
+
+
+def _attach_metrics(result: dict, started_at: float) -> dict:
+    transactions = result.get("transactions", [])
+    metrics = {
+        "execution_ms": round((perf_counter() - started_at) * 1000, 3),
+        "total_events": len(result.get("events", [])),
+        "total_transactions": len(transactions),
+        "pending_transactions": _count_by_status(transactions, "PENDING"),
+        "confirmed_transactions": _count_by_status(transactions, "CONFIRMED"),
+        "finalized_transactions": _count_by_status(transactions, "FINALIZED"),
+        "chain_height": int(result.get("chain_height", 0)),
+    }
+
+    if result.get("model") == "utxo":
+        metrics["state_items"] = len(result.get("utxos", []))
+    else:
+        metrics["state_items"] = len(result.get("state", {}))
+
+    result["metrics"] = metrics
+    return result
+
+
 def run_utxo_coffee_export() -> dict:
+    started_at = perf_counter()
     chain = utxo_model.UTXO_Blockchain(confirmations_required=2, max_txs_per_block=5)
 
     outputs = []
@@ -146,7 +173,7 @@ def run_utxo_coffee_export() -> dict:
 
     compliance = chain.audit_compliance("Lote_Cafe_001")
 
-    return {
+    result = {
         "model": "utxo",
         "scenario": "coffee-export",
         "events": outputs,
@@ -161,9 +188,11 @@ def run_utxo_coffee_export() -> dict:
         "transactions": chain.ledger_snapshot(),
         "utxos": chain.utxo_snapshot(),
     }
+    return _attach_metrics(result, started_at)
 
 
 def run_account_coffee_export() -> dict:
+    started_at = perf_counter()
     chain = account_model.AccountBased_Blockchain(confirmations_required=2, max_txs_per_block=5)
 
     outputs = []
@@ -190,7 +219,7 @@ def run_account_coffee_export() -> dict:
 
     compliance = chain.audit_compliance("Lote_Cafe_001")
 
-    return {
+    result = {
         "model": "account",
         "scenario": "coffee-export",
         "events": outputs,
@@ -205,9 +234,11 @@ def run_account_coffee_export() -> dict:
         "transactions": chain.ledger_snapshot(),
         "state": chain.state_snapshot(),
     }
+    return _attach_metrics(result, started_at)
 
 
 def run_utxo_retail() -> dict:
+    started_at = perf_counter()
     chain = utxo_model.UTXO_Blockchain(confirmations_required=2, max_txs_per_block=10)
     chain.create_wallet("Fintech_Emisor")
     chain.create_wallet("Comercio_A")
@@ -220,7 +251,7 @@ def run_utxo_retail() -> dict:
     events.append(chain.send_transaction("Comercio_A", "Comercio_B", 2.1, fee=0.02))
     events.append(chain.mine_block("Nodo_Retail_2"))
 
-    return {
+    result = {
         "model": "utxo",
         "scenario": "retail-payments",
         "events": events,
@@ -234,9 +265,11 @@ def run_utxo_retail() -> dict:
         "transactions": chain.ledger_snapshot(),
         "utxos": chain.utxo_snapshot(),
     }
+    return _attach_metrics(result, started_at)
 
 
 def run_account_retail() -> dict:
+    started_at = perf_counter()
     chain = account_model.AccountBased_Blockchain(confirmations_required=2, max_txs_per_block=10)
     chain.create_wallet("Fintech_Emisor")
     chain.create_wallet("Comercio_A")
@@ -251,7 +284,7 @@ def run_account_retail() -> dict:
     events.append(chain.send_transaction("Comercio_A", "Comercio_B", 2.1, fee=0.02, expected_nonce=0))
     events.append(chain.mine_block("Nodo_Retail_2"))
 
-    return {
+    result = {
         "model": "account",
         "scenario": "retail-payments",
         "events": events,
@@ -265,6 +298,7 @@ def run_account_retail() -> dict:
         "transactions": chain.ledger_snapshot(),
         "state": chain.state_snapshot(),
     }
+    return _attach_metrics(result, started_at)
 
 
 def run_scenario(model: str, scenario: str) -> list[dict]:
@@ -303,6 +337,9 @@ def print_human_report(results: list[dict]) -> None:
             print(f"    - missing_certificates: {missing_certs}")
 
         print(f"\nTransacciones registradas: {len(result['transactions'])}")
+        print("Métricas:")
+        for key, value in result.get("metrics", {}).items():
+            print(f"  - {key}: {value}")
 
 
 def main() -> None:
