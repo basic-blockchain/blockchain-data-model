@@ -7,7 +7,11 @@ set -euo pipefail
 #   bootstrap ORG [repo1,repo2,...]
 #   audit ORG [repo1,repo2,...]
 #   promote-pr ORG REPO SOURCE TARGET
+#   promote-chain ORG REPO
 #   onboard ORG [repo1,repo2,...]
+#   auth-status
+#   auth-login
+#   auth-enable-path
 #
 # Environment variables for bootstrap:
 #   REQUIRED_CHECK (default: CI Pull Request / ci)
@@ -24,13 +28,19 @@ Usage:
   bash scripts/devsecops_org_cli.sh bootstrap ORG [repo1,repo2,...]
   bash scripts/devsecops_org_cli.sh audit ORG [repo1,repo2,...]
   bash scripts/devsecops_org_cli.sh promote-pr ORG REPO SOURCE TARGET
+  bash scripts/devsecops_org_cli.sh promote-chain ORG REPO
   bash scripts/devsecops_org_cli.sh onboard ORG [repo1,repo2,...]
+  bash scripts/devsecops_org_cli.sh auth-status
+  bash scripts/devsecops_org_cli.sh auth-login
+  bash scripts/devsecops_org_cli.sh auth-enable-path
 
 Examples:
   DRY_RUN=true bash scripts/devsecops_org_cli.sh bootstrap basic-blockchain
   bash scripts/devsecops_org_cli.sh audit basic-blockchain "repo-a,repo-b"
   bash scripts/devsecops_org_cli.sh promote-pr basic-blockchain blockchain-data-model qa develop
+  bash scripts/devsecops_org_cli.sh promote-chain basic-blockchain blockchain-data-model
   APPLY_CHANGES=true bash scripts/devsecops_org_cli.sh onboard basic-blockchain
+  bash scripts/devsecops_org_cli.sh auth-login
 EOF
 }
 
@@ -167,8 +177,26 @@ cmd_onboard() {
     bash scripts/devsecops_org_onboarding.sh "${org}" "${repos}"
 }
 
+cmd_promote_chain() {
+  local org="${1:?Missing org}"
+  local repo="${2:?Missing repo}"
+  GH_BIN="${GH_BIN}" DRY_RUN="${DRY_RUN:-false}" bash scripts/devsecops_promotion_chain.sh "${org}" "${repo}"
+}
+
+cmd_auth_status() {
+  GH_BIN="${GH_BIN:-}" bash scripts/gh_auth_setup.sh status
+}
+
+cmd_auth_login() {
+  GH_BIN="${GH_BIN:-}" bash scripts/gh_auth_setup.sh login
+}
+
+cmd_auth_enable_path() {
+  bash scripts/gh_auth_setup.sh enable-path
+}
+
 main() {
-  if [[ $# -lt 2 ]]; then
+  if [[ $# -lt 1 ]]; then
     usage
     exit 1
   fi
@@ -176,20 +204,56 @@ main() {
   local command="$1"
   shift
 
-  require_gh_or_fail
+  case "$command" in
+    bootstrap|audit|onboard)
+      if [[ $# -lt 1 ]]; then
+        usage
+        exit 1
+      fi
+      ;;
+    promote-pr)
+      if [[ $# -lt 4 ]]; then
+        usage
+        exit 1
+      fi
+      ;;
+    promote-chain)
+      if [[ $# -lt 2 ]]; then
+        usage
+        exit 1
+      fi
+      ;;
+  esac
 
   case "$command" in
     bootstrap)
+      require_gh_or_fail
       cmd_bootstrap "$@"
       ;;
     audit)
+      require_gh_or_fail
       cmd_audit "$@"
       ;;
     promote-pr)
+      require_gh_or_fail
       cmd_promote_pr "$@"
       ;;
+    promote-chain)
+      require_gh_or_fail
+      cmd_promote_chain "$@"
+      ;;
     onboard)
+      require_gh_or_fail
       cmd_onboard "$@"
+      ;;
+    auth-status)
+      cmd_auth_status
+      ;;
+    auth-login)
+      cmd_auth_login
+      ;;
+    auth-enable-path)
+      cmd_auth_enable_path
       ;;
     *)
       usage
