@@ -31,6 +31,15 @@ jobs:
 - Dismiss stale approvals
 - Block direct pushes to `production`
 
+## Promotion chain policy
+- Promotion is PR-based and automated through workflow:
+  - `production -> main`
+  - `production -> staging`
+  - `staging -> qa`
+  - `qa -> develop`
+- This keeps `main` synchronized with production while preserving staged validation layers.
+- Direct local pushes to `production` are blocked by `.githooks/pre-push`.
+
 ## Rollout sequence
 1. Apply workflows and templates in this repository as reference implementation.
 2. Create/update the organization `.github` repository with reusable assets.
