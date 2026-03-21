@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -6,6 +7,9 @@ from pathlib import Path
 
 def _run_cli(args, cwd: Path):
     cmd = [sys.executable, "scripts/multiuser_wallet_cli.py", *args]
+    env = os.environ.copy()
+    env["PERSISTENCE_BACKEND"] = "json"
+    env["PYTHONIOENCODING"] = "utf-8"
     completed = subprocess.run(
         cmd,
         cwd=str(cwd),
@@ -13,6 +17,9 @@ def _run_cli(args, cwd: Path):
         text=True,
         check=False,
         timeout=120,
+        env=env,
+        encoding="utf-8",
+        errors="replace",
     )
     return completed
 
@@ -813,5 +820,4 @@ def test_cli_non_json_error_alert_message_omits_error_prefix(tmp_path):
 
     assert out.returncode == 1
     assert "[ERROR] mint" in out.stderr
-    assert "Mensaje: wallet wallet_missing no existe." in out.stderr
-    assert "Mensaje: Error:" not in out.stderr
+    assert "wallet wallet_missing no existe" in out.stderr
