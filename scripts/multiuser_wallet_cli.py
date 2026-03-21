@@ -69,6 +69,8 @@ def main() -> None:
     cmd_transfer.add_argument("--amount", required=True)
     cmd_transfer.add_argument("--fee", default="0")
     cmd_transfer.add_argument("--reference", default="")
+    cmd_transfer.add_argument("--sender-token", default="")
+    cmd_transfer.add_argument("--expected-nonce", type=int)
 
     cmd_balance = subparsers.add_parser("balance", help="Get wallet balance")
     _add_json_flag(cmd_balance)
@@ -122,6 +124,12 @@ def main() -> None:
     cmd_list_alerts.add_argument("--severity", default="")
     cmd_list_alerts.add_argument("--limit", type=int, default=50)
 
+    cmd_verify_integrity = subparsers.add_parser(
+        "verify-integrity",
+        help="Verify transfer nonce and hash-chain integrity",
+    )
+    _add_json_flag(cmd_verify_integrity)
+
     args = parser.parse_args()
     store_file = Path(args.store_file)
     output_json = bool(args.json or getattr(args, "cmd_json", False))
@@ -148,6 +156,8 @@ def main() -> None:
                 args.amount,
                 fee=args.fee,
                 reference=args.reference,
+                sender_token=args.sender_token,
+                expected_nonce=getattr(args, "expected_nonce", None),
             )
             mutate = True
         elif args.command == "balance":
@@ -195,6 +205,8 @@ def main() -> None:
                 user_id=args.user_id,
                 severity=args.severity,
             )
+        elif args.command == "verify-integrity":
+            result = ledger.verify_transfer_integrity()
         else:
             result = "Error: command no soportado."
 
@@ -202,7 +214,12 @@ def main() -> None:
         if mutate:
             revision_id = store.save_ledger(ledger)
 
-        success = not (isinstance(result, str) and result.startswith("Error:"))
+        success = not (
+            isinstance(result, str)
+            and (result.startswith("Error:") or result.startswith("Wallet invalida."))
+        )
+        if isinstance(result, dict) and "valid" in result and not bool(result["valid"]):
+            success = False
         if output_json:
             payload = {
                 "success": success,

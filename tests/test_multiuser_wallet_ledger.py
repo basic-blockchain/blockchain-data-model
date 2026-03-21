@@ -1,4 +1,5 @@
 from decimal import Decimal
+from unittest.mock import patch
 
 from domain.multiuser_wallet_ledger import MultiUserWalletLedger
 
@@ -9,31 +10,49 @@ def test_create_users_wallets_and_transfer_flow():
     assert "creado" in ledger.create_user("u-alice", "Alice")
     assert "creado" in ledger.create_user("u-bob", "Bob")
 
-    msg_wallet_a = ledger.create_wallet("u-alice", wallet_id="w-alice")
-    msg_wallet_b = ledger.create_wallet("u-bob", wallet_id="w-bob")
-    assert "creada" in msg_wallet_a
-    assert "creada" in msg_wallet_b
+    msg_wallet_a = ledger.create_wallet("u-alice", wallet_id="wallet_user_alpha_01")
+    msg_wallet_b = ledger.create_wallet("u-bob", wallet_id="wallet_user_bravo_02")
+    assert "creada" in msg_wallet_a["message"]
+    assert "creada" in msg_wallet_b["message"]
+    token_a = msg_wallet_a["auth_token"]
 
-    assert "Mint" in ledger.mint("w-alice", "100")
-    assert ledger.get_wallet_balance("w-alice") == Decimal("100.00000000")
+    assert "Mint" in ledger.mint("wallet_user_alpha_01", "100")
+    assert ledger.get_wallet_balance("wallet_user_alpha_01") == Decimal("100.00000000")
 
-    tx = ledger.transfer("w-alice", "w-bob", "24.5", fee="0.5", reference="invoice-001")
+    tx = ledger.transfer(
+        "wallet_user_alpha_01",
+        "wallet_user_bravo_02",
+        "24.5",
+        fee="0.5",
+        reference="invoice-001",
+        sender_token=token_a,
+    )
     assert "Transferencia" in tx
 
-    assert ledger.get_wallet_balance("w-alice") == Decimal("75.00000000")
-    assert ledger.get_wallet_balance("w-bob") == Decimal("24.50000000")
+    assert ledger.get_wallet_balance("wallet_user_alpha_01") == Decimal("75.00000000")
+    assert ledger.get_wallet_balance("wallet_user_bravo_02") == Decimal("24.50000000")
     assert len(ledger.state_snapshot()["transfers"]) == 2
+    transfer_record = ledger.state_snapshot()["transfers"][1]
+    assert transfer_record["nonce"] == 1
+    assert transfer_record["previous_hash"] == "GENESIS"
+    assert len(transfer_record["tx_hash"]) == 64
 
 
 def test_transfer_rejects_insufficient_balance():
     ledger = MultiUserWalletLedger()
     ledger.create_user("u-a", "A")
     ledger.create_user("u-b", "B")
-    ledger.create_wallet("u-a", wallet_id="wa")
-    ledger.create_wallet("u-b", wallet_id="wb")
-    ledger.mint("wa", "1")
+    created_a = ledger.create_wallet("u-a", wallet_id="wallet_user_alpha_01")
+    ledger.create_wallet("u-b", wallet_id="wallet_user_bravo_02")
+    ledger.mint("wallet_user_alpha_01", "1")
 
-    error = ledger.transfer("wa", "wb", "2", fee="0")
+    error = ledger.transfer(
+        "wallet_user_alpha_01",
+        "wallet_user_bravo_02",
+        "2",
+        fee="0",
+        sender_token=created_a["auth_token"],
+    )
     assert "Fondos insuficientes" in error or "fondos insuficientes" in error
 
 
@@ -41,12 +60,18 @@ def test_transfer_rejects_when_policy_disallows_sender():
     ledger = MultiUserWalletLedger()
     ledger.create_user("u-a", "A")
     ledger.create_user("u-b", "B")
-    ledger.create_wallet("u-a", wallet_id="wa")
-    ledger.create_wallet("u-b", wallet_id="wb")
-    ledger.mint("wa", "20")
+    created_a = ledger.create_wallet("u-a", wallet_id="wallet_user_alpha_01")
+    ledger.create_wallet("u-b", wallet_id="wallet_user_bravo_02")
+    ledger.mint("wallet_user_alpha_01", "20")
 
     assert "actualizada" in ledger.set_user_policy("u-a", can_transfer=False)
-    error = ledger.transfer("wa", "wb", "5", fee="0")
+    error = ledger.transfer(
+        "wallet_user_alpha_01",
+        "wallet_user_bravo_02",
+        "5",
+        fee="0",
+        sender_token=created_a["auth_token"],
+    )
     assert "impide transferencias" in error
 
 
@@ -54,13 +79,25 @@ def test_transfer_rejects_when_daily_limit_is_exceeded():
     ledger = MultiUserWalletLedger()
     ledger.create_user("u-a", "A")
     ledger.create_user("u-b", "B")
-    ledger.create_wallet("u-a", wallet_id="wa")
-    ledger.create_wallet("u-b", wallet_id="wb")
-    ledger.mint("wa", "50")
+    created_a = ledger.create_wallet("u-a", wallet_id="wallet_user_alpha_01")
+    ledger.create_wallet("u-b", wallet_id="wallet_user_bravo_02")
+    ledger.mint("wallet_user_alpha_01", "50")
 
     assert "actualizada" in ledger.set_user_policy("u-a", daily_limit="10")
-    assert "Transferencia" in ledger.transfer("wa", "wb", "7", fee="0")
-    error = ledger.transfer("wa", "wb", "4", fee="0")
+    assert "Transferencia" in ledger.transfer(
+        "wallet_user_alpha_01",
+        "wallet_user_bravo_02",
+        "7",
+        fee="0",
+        sender_token=created_a["auth_token"],
+    )
+    error = ledger.transfer(
+        "wallet_user_alpha_01",
+        "wallet_user_bravo_02",
+        "4",
+        fee="0",
+        sender_token=created_a["auth_token"],
+    )
     assert "límite diario excedido" in error
 
 
@@ -68,14 +105,26 @@ def test_transfer_uses_most_restrictive_daily_limit_between_policy_and_risk_prof
     ledger = MultiUserWalletLedger()
     ledger.create_user("u-a", "A")
     ledger.create_user("u-b", "B")
-    ledger.create_wallet("u-a", wallet_id="wa")
-    ledger.create_wallet("u-b", wallet_id="wb")
-    ledger.mint("wa", "50")
+    created_a = ledger.create_wallet("u-a", wallet_id="wallet_user_alpha_01")
+    ledger.create_wallet("u-b", wallet_id="wallet_user_bravo_02")
+    ledger.mint("wallet_user_alpha_01", "50")
 
     assert "actualizada" in ledger.set_user_policy("u-a", daily_limit="20")
     assert "actualizado" in ledger.set_user_risk_profile("u-a", daily_limit="8")
-    assert "Transferencia" in ledger.transfer("wa", "wb", "7", fee="0")
-    error = ledger.transfer("wa", "wb", "2", fee="0")
+    assert "Transferencia" in ledger.transfer(
+        "wallet_user_alpha_01",
+        "wallet_user_bravo_02",
+        "7",
+        fee="0",
+        sender_token=created_a["auth_token"],
+    )
+    error = ledger.transfer(
+        "wallet_user_alpha_01",
+        "wallet_user_bravo_02",
+        "2",
+        fee="0",
+        sender_token=created_a["auth_token"],
+    )
     assert "límite diario excedido" in error
     assert "Límite=8.00000000" in error
 
@@ -84,9 +133,9 @@ def test_transfer_generates_alerts_for_configured_thresholds():
     ledger = MultiUserWalletLedger()
     ledger.create_user("u-a", "A")
     ledger.create_user("u-b", "B")
-    ledger.create_wallet("u-a", wallet_id="wa")
-    ledger.create_wallet("u-b", wallet_id="wb")
-    ledger.mint("wa", "100")
+    created_a = ledger.create_wallet("u-a", wallet_id="wallet_user_alpha_01")
+    ledger.create_wallet("u-b", wallet_id="wallet_user_bravo_02")
+    ledger.mint("wallet_user_alpha_01", "100")
 
     assert "actualizado" in ledger.set_user_risk_profile(
         "u-a",
@@ -94,12 +143,24 @@ def test_transfer_generates_alerts_for_configured_thresholds():
         daily_alert_threshold="9",
     )
 
-    assert "Transferencia" in ledger.transfer("wa", "wb", "6", fee="0")
+    assert "Transferencia" in ledger.transfer(
+        "wallet_user_alpha_01",
+        "wallet_user_bravo_02",
+        "6",
+        fee="0",
+        sender_token=created_a["auth_token"],
+    )
     alerts = ledger.list_alerts()
     assert len(alerts) == 1
     assert alerts[0]["type"] == "TRANSFER_THRESHOLD"
 
-    assert "Transferencia" in ledger.transfer("wa", "wb", "4", fee="0")
+    assert "Transferencia" in ledger.transfer(
+        "wallet_user_alpha_01",
+        "wallet_user_bravo_02",
+        "4",
+        fee="0",
+        sender_token=created_a["auth_token"],
+    )
     alerts = ledger.list_alerts()
     assert len(alerts) == 2
     assert alerts[0]["type"] == "DAILY_THRESHOLD"
@@ -114,3 +175,126 @@ def test_set_risk_profile_applies_named_defaults():
     assert profile["profile_name"] == "RESTRICTED"
     assert profile["daily_limit"] == "1000.00000000"
     assert profile["transfer_alert_threshold"] == "300.00000000"
+
+
+def test_create_wallet_rejects_invalid_id_format_or_length():
+    ledger = MultiUserWalletLedger()
+    ledger.create_user("u-a", "A")
+
+    error = ledger.create_wallet("u-a", wallet_id="ab")
+    assert error == "Wallet invalida. Usa 20-30 caracteres: letras, numeros, '-' o '_'."
+
+
+def test_wallet_token_rotates_every_10_seconds_on_access():
+    ledger = MultiUserWalletLedger()
+    ledger.create_user("u-a", "A")
+
+    with patch.object(MultiUserWalletLedger, "_now_epoch", return_value=100):
+        created = ledger.create_wallet("u-a", wallet_id="wallet_user_alpha_01")
+        assert "creada" in created["message"]
+        first = created["auth_token"]
+
+    with patch.object(MultiUserWalletLedger, "_now_epoch", return_value=109):
+        same = ledger.list_wallets(user_id="u-a")[0]["auth_token"]
+    assert same == first
+
+    with patch.object(MultiUserWalletLedger, "_now_epoch", return_value=110):
+        rotated = ledger.list_wallets(user_id="u-a")[0]["auth_token"]
+    assert rotated != first
+
+
+def test_transfer_requires_sender_token():
+    ledger = MultiUserWalletLedger()
+    ledger.create_user("u-a", "A")
+    ledger.create_user("u-b", "B")
+    ledger.create_wallet("u-a", wallet_id="wallet_user_alpha_01")
+    ledger.create_wallet("u-b", wallet_id="wallet_user_bravo_02")
+    ledger.mint("wallet_user_alpha_01", "5")
+
+    error = ledger.transfer("wallet_user_alpha_01", "wallet_user_bravo_02", "1", fee="0")
+    assert "sender_token es requerido" in error
+
+
+def test_transfer_rejects_invalid_sender_token():
+    ledger = MultiUserWalletLedger()
+    ledger.create_user("u-a", "A")
+    ledger.create_user("u-b", "B")
+    ledger.create_wallet("u-a", wallet_id="wallet_user_alpha_01")
+    ledger.create_wallet("u-b", wallet_id="wallet_user_bravo_02")
+    ledger.mint("wallet_user_alpha_01", "5")
+
+    error = ledger.transfer(
+        "wallet_user_alpha_01",
+        "wallet_user_bravo_02",
+        "1",
+        fee="0",
+        sender_token="INVALIDTOKEN1",
+    )
+    assert "token inválido" in error
+
+
+def test_transfer_rejects_expired_sender_token_and_rotates_it():
+    ledger = MultiUserWalletLedger()
+    ledger.create_user("u-a", "A")
+    ledger.create_user("u-b", "B")
+
+    with patch.object(MultiUserWalletLedger, "_now_epoch", return_value=100):
+        created = ledger.create_wallet("u-a", wallet_id="wallet_user_alpha_01")
+        ledger.create_wallet("u-b", wallet_id="wallet_user_bravo_02")
+        ledger.mint("wallet_user_alpha_01", "5")
+
+    old_token = created["auth_token"]
+    with patch.object(MultiUserWalletLedger, "_now_epoch", return_value=111):
+        error = ledger.transfer(
+            "wallet_user_alpha_01",
+            "wallet_user_bravo_02",
+            "1",
+            fee="0",
+            sender_token=old_token,
+        )
+
+    assert "token expirado" in error
+    refreshed = ledger.list_wallets(user_id="u-a")[0]["auth_token"]
+    assert refreshed != old_token
+
+
+def test_transfer_rejects_invalid_expected_nonce():
+    ledger = MultiUserWalletLedger()
+    ledger.create_user("u-a", "A")
+    ledger.create_user("u-b", "B")
+    created = ledger.create_wallet("u-a", wallet_id="wallet_user_alpha_01")
+    ledger.create_wallet("u-b", wallet_id="wallet_user_bravo_02")
+    ledger.mint("wallet_user_alpha_01", "5")
+
+    error = ledger.transfer(
+        "wallet_user_alpha_01",
+        "wallet_user_bravo_02",
+        "1",
+        fee="0",
+        sender_token=created["auth_token"],
+        expected_nonce=2,
+    )
+    assert "nonce inválido" in error
+
+
+def test_verify_transfer_integrity_detects_hash_tampering():
+    ledger = MultiUserWalletLedger()
+    ledger.create_user("u-a", "A")
+    ledger.create_user("u-b", "B")
+    created = ledger.create_wallet("u-a", wallet_id="wallet_user_alpha_01")
+    ledger.create_wallet("u-b", wallet_id="wallet_user_bravo_02")
+    ledger.mint("wallet_user_alpha_01", "10")
+
+    assert "Transferencia" in ledger.transfer(
+        "wallet_user_alpha_01",
+        "wallet_user_bravo_02",
+        "2",
+        fee="0",
+        sender_token=created["auth_token"],
+    )
+    assert ledger.verify_transfer_integrity()["valid"] is True
+
+    ledger.transfers[-1]["tx_hash"] = "0" * 64
+    report = ledger.verify_transfer_integrity()
+    assert report["valid"] is False
+    assert "Hash de transferencia inválido" in report["reason"]
