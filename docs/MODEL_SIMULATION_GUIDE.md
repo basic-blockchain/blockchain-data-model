@@ -94,6 +94,13 @@ No es el núcleo del sistema de simulación de modelos blockchain.
 | Multiusuario CLI | `list-wallets` | No | Solo lectura |
 | Multiusuario CLI | `snapshot` | No | Solo lectura |
 | Multiusuario CLI | `list-revisions` | No | Solo lectura |
+| Multiusuario CLI | `set-policy` | Sí | `data/multiuser/wallet-ledger.json` |
+| Multiusuario CLI | `set-risk-profile` | Sí | `data/multiuser/wallet-ledger.json` |
+| Multiusuario CLI | `get-policy` | No | Solo lectura |
+| Multiusuario CLI | `list-policies` | No | Solo lectura |
+| Multiusuario CLI | `get-risk-profile` | No | Solo lectura |
+| Multiusuario CLI | `list-risk-profiles` | No | Solo lectura |
+| Multiusuario CLI | `list-alerts` | No | Solo lectura |
 
 ## Ejemplos de uso (multiusuario)
 
@@ -116,4 +123,13 @@ py scripts/multiuser_wallet_cli.py --store-file data/multiuser/wallet-ledger.jso
 py scripts/multiuser_wallet_cli.py --store-file data/multiuser/wallet-ledger.json balance --wallet-id w-bob --json
 py scripts/multiuser_wallet_cli.py --store-file data/multiuser/wallet-ledger.json snapshot --json
 py scripts/multiuser_wallet_cli.py --store-file data/multiuser/wallet-ledger.json list-revisions --limit 10 --json
+
+# 6) Configurar policy + perfil de riesgo para alertas
+py scripts/multiuser_wallet_cli.py --store-file data/multiuser/wallet-ledger.json set-policy --user-id u-alice --can-transfer true --daily-limit 25 --json
+py scripts/multiuser_wallet_cli.py --store-file data/multiuser/wallet-ledger.json set-risk-profile --user-id u-alice --profile-name HIGH --transfer-alert-threshold 5 --daily-alert-threshold 12 --json
+
+# 7) Ejecutar transferencias y consultar alertas
+py scripts/multiuser_wallet_cli.py --store-file data/multiuser/wallet-ledger.json transfer --from-wallet w-alice --to-wallet w-bob --amount 6 --fee 0 --reference risk-check-1 --json
+py scripts/multiuser_wallet_cli.py --store-file data/multiuser/wallet-ledger.json list-alerts --user-id u-alice --limit 20 --json
+py scripts/multiuser_wallet_cli.py --store-file data/multiuser/wallet-ledger.json get-risk-profile --user-id u-alice --json
 ```
