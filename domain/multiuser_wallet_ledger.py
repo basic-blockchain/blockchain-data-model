@@ -29,6 +29,7 @@ class UserRecord:
 class WalletRecord:
     wallet_id: str
     user_id: str
+    model: str
     currency: str
     balance: Decimal
     auth_token: str
@@ -58,6 +59,7 @@ class MultiUserWalletLedger:
     def __init__(self):
         self.users: dict[str, UserRecord] = {}
         self.wallets: dict[str, WalletRecord] = {}
+        self.utxos: dict[str, list[dict]] = {}
         self.user_wallets: dict[str, list[str]] = {}
         self.user_policies: dict[str, UserPolicyRecord] = {}
         self.user_risk_profiles: dict[str, UserRiskProfileRecord] = {}
@@ -112,6 +114,17 @@ class MultiUserWalletLedger:
     @staticmethod
     def _is_valid_wallet_id(value: str) -> bool:
         return re.fullmatch(r"[A-Za-z0-9_-]{20,30}", value) is not None
+
+    @staticmethod
+    def _normalize_model(model: str) -> str:
+        normalized = str(model or "ACCOUNT").strip().upper()
+        if normalized not in {"ACCOUNT", "UTXO"}:
+            return ""
+        return normalized
+
+    @staticmethod
+    def _build_utxo_id() -> str:
+        return f"utxo-{secrets.token_hex(10)}"
 
     def _refresh_wallet_token_if_expired(self, wallet: WalletRecord) -> None:
         ttl_seconds = 10
@@ -364,6 +377,7 @@ class MultiUserWalletLedger:
     def _build_transfer_hash(
         *,
         transfer_id: str,
+        model: str,
         sender_wallet: str,
         receiver_wallet: str,
         amount: Decimal,
@@ -374,11 +388,26 @@ class MultiUserWalletLedger:
         previous_hash: str,
     ) -> str:
         payload = (
-            f"{transfer_id}|{sender_wallet}|{receiver_wallet}|"
+            f"{transfer_id}|{model}|{sender_wallet}|{receiver_wallet}|"
             f"{amount.normalize()}|{fee.normalize()}|{reference}|"
             f"{nonce}|{created_at}|{previous_hash}"
         )
         return sha256(payload.encode("utf-8")).hexdigest()
+
+    def _sum_wallet_utxos(self, wallet_id: str, currency: str) -> Decimal:
+        total = Decimal("0")
+        for utxo in self.utxos.get(wallet_id, []):
+            if str(utxo.get("currency", "")) != currency:
+                continue
+            total += normalize_amount(utxo.get("amount", "0"))
+        return total
+
+    def _sync_wallet_balance(self, wallet_id: str) -> None:
+        wallet = self.wallets.get(wallet_id)
+        if wallet is None:
+            return
+        if wallet.model == "UTXO":
+            wallet.balance = self._sum_wallet_utxos(wallet_id, wallet.currency)
 
     def _last_transfer_hash(self) -> str:
         for transfer in reversed(self.transfers):
@@ -404,6 +433,7 @@ class MultiUserWalletLedger:
             sender_wallet = str(transfer.get("sender_wallet", ""))
             receiver_wallet = str(transfer.get("receiver_wallet", ""))
             transfer_id = str(transfer.get("transfer_id", ""))
+            model = str(transfer.get("model", "ACCOUNT")).upper()
             reference = str(transfer.get("reference", ""))
             created_at = str(transfer.get("created_at", ""))
             nonce = int(str(transfer.get("nonce", "-1")))
@@ -435,6 +465,7 @@ class MultiUserWalletLedger:
 
             expected_hash = self._build_transfer_hash(
                 transfer_id=transfer_id,
+                model=model,
                 sender_wallet=sender_wallet,
                 receiver_wallet=receiver_wallet,
                 amount=amount,
@@ -464,9 +495,19 @@ class MultiUserWalletLedger:
             "reason": "Integridad verificada correctamente.",
         }
 
-    def create_wallet(self, user_id: str, wallet_id: str = "", currency: str = "USDX") -> str | dict:
+    def create_wallet(
+        self,
+        user_id: str,
+        wallet_id: str = "",
+        currency: str = "USDX",
+        model: str = "ACCOUNT",
+    ) -> str | dict:
         if user_id not in self.users:
             return f"Error: el usuario {user_id} no existe."
+
+        wallet_model = self._normalize_model(model)
+        if not wallet_model:
+            return "Error: model inválido. Usa ACCOUNT o UTXO."
 
         final_wallet_id = wallet_id.strip() or self._build_wallet_id()
         if not self._is_valid_wallet_id(final_wallet_id):
@@ -477,6 +518,7 @@ class MultiUserWalletLedger:
         wallet = WalletRecord(
             wallet_id=final_wallet_id,
             user_id=user_id,
+            model=wallet_model,
             currency=currency,
             balance=Decimal("0"),
             auth_token=self._build_wallet_token(12),
@@ -484,11 +526,13 @@ class MultiUserWalletLedger:
             created_at=self._timestamp(),
         )
         self.wallets[final_wallet_id] = wallet
+        self.utxos[final_wallet_id] = []
         self.user_wallets[user_id].append(final_wallet_id)
         return {
             "message": f"Wallet {final_wallet_id} creada para {user_id}.",
             "wallet_id": final_wallet_id,
             "user_id": user_id,
+            "model": wallet_model,
             "currency": currency,
             "auth_token": wallet.auth_token,
             "token_issued_at": wallet.token_issued_at,
@@ -504,7 +548,20 @@ class MultiUserWalletLedger:
 
         wallet = self.wallets[wallet_id]
         self._refresh_wallet_token_if_expired(wallet)
-        wallet.balance += minted
+        if wallet.model == "ACCOUNT":
+            wallet.balance += minted
+        else:
+            self.utxos.setdefault(wallet_id, []).append(
+                {
+                    "utxo_id": self._build_utxo_id(),
+                    "wallet_id": wallet_id,
+                    "currency": wallet.currency,
+                    "amount": str(minted),
+                    "source": "MINT",
+                    "created_at": self._timestamp(),
+                }
+            )
+            self._sync_wallet_balance(wallet_id)
         self.transfers.append(
             {
                 "transfer_id": self._build_transfer_id(),
@@ -545,6 +602,8 @@ class MultiUserWalletLedger:
         sender = self.wallets[sender_wallet]
         receiver = self.wallets[receiver_wallet]
         self._refresh_wallet_token_if_expired(receiver)
+        if sender.model != receiver.model:
+            return "Error: transfer entre wallets de distinto modelo no soportada."
         if sender.currency != receiver.currency:
             return "Error: transfer entre wallets de distinta moneda no soportada."
 
@@ -603,14 +662,65 @@ class MultiUserWalletLedger:
             )
 
         total_cost = transfer_amount + tx_fee
-        if sender.balance < total_cost:
-            return (
-                f"Error: fondos insuficientes. Disponible={sender.balance}, "
-                f"Requerido={total_cost}."
+        if sender.model == "ACCOUNT":
+            if sender.balance < total_cost:
+                return (
+                    f"Error: fondos insuficientes. Disponible={sender.balance}, "
+                    f"Requerido={total_cost}."
+                )
+            sender.balance -= total_cost
+            receiver.balance += transfer_amount
+        else:
+            selected: list[dict] = []
+            selected_total = Decimal("0")
+            for utxo in self.utxos.get(sender_wallet, []):
+                if str(utxo.get("currency", "")) != sender.currency:
+                    continue
+                selected.append(utxo)
+                selected_total += normalize_amount(utxo.get("amount", "0"))
+                if selected_total >= total_cost:
+                    break
+
+            if selected_total < total_cost:
+                available = self._sum_wallet_utxos(sender_wallet, sender.currency)
+                return (
+                    f"Error: fondos insuficientes. Disponible={available}, "
+                    f"Requerido={total_cost}."
+                )
+
+            consumed_ids = {str(item.get("utxo_id", "")) for item in selected}
+            self.utxos[sender_wallet] = [
+                utxo
+                for utxo in self.utxos.get(sender_wallet, [])
+                if str(utxo.get("utxo_id", "")) not in consumed_ids
+            ]
+
+            self.utxos.setdefault(receiver_wallet, []).append(
+                {
+                    "utxo_id": self._build_utxo_id(),
+                    "wallet_id": receiver_wallet,
+                    "currency": receiver.currency,
+                    "amount": str(transfer_amount),
+                    "source": "TRANSFER",
+                    "created_at": self._timestamp(),
+                }
             )
 
-        sender.balance -= total_cost
-        receiver.balance += transfer_amount
+            change = selected_total - total_cost
+            if change > 0:
+                self.utxos.setdefault(sender_wallet, []).append(
+                    {
+                        "utxo_id": self._build_utxo_id(),
+                        "wallet_id": sender_wallet,
+                        "currency": sender.currency,
+                        "amount": str(change),
+                        "source": "CHANGE",
+                        "created_at": self._timestamp(),
+                    }
+                )
+
+            self._sync_wallet_balance(sender_wallet)
+            self._sync_wallet_balance(receiver_wallet)
 
         transfer_id = self._build_transfer_id()
         transfer_nonce = next_nonce
@@ -618,6 +728,7 @@ class MultiUserWalletLedger:
         created_at = self._timestamp()
         tx_hash = self._build_transfer_hash(
             transfer_id=transfer_id,
+            model=sender.model,
             sender_wallet=sender_wallet,
             receiver_wallet=receiver_wallet,
             amount=transfer_amount,
@@ -631,6 +742,7 @@ class MultiUserWalletLedger:
             {
                 "transfer_id": transfer_id,
                 "type": "TRANSFER",
+                "model": sender.model,
                 "sender_wallet": sender_wallet,
                 "receiver_wallet": receiver_wallet,
                 "amount": str(transfer_amount),
@@ -677,7 +789,25 @@ class MultiUserWalletLedger:
         if wallet_id not in self.wallets:
             return Decimal("0")
         self._refresh_wallet_token_if_expired(self.wallets[wallet_id])
+        self._sync_wallet_balance(wallet_id)
         return self.wallets[wallet_id].balance
+
+    def list_utxos(self, wallet_id: str = "") -> list[dict]:
+        if wallet_id:
+            source = self.utxos.get(wallet_id, [])
+        else:
+            source = [item for items in self.utxos.values() for item in items]
+        return [
+            {
+                "utxo_id": str(item.get("utxo_id", "")),
+                "wallet_id": str(item.get("wallet_id", "")),
+                "currency": str(item.get("currency", "")),
+                "amount": str(normalize_amount(item.get("amount", "0"))),
+                "source": str(item.get("source", "")),
+                "created_at": str(item.get("created_at", "")),
+            }
+            for item in source
+        ]
 
     def list_users(self) -> list[dict]:
         return [
@@ -704,8 +834,10 @@ class MultiUserWalletLedger:
             {
                 "wallet_id": wallet.wallet_id,
                 "user_id": wallet.user_id,
+                "model": wallet.model,
                 "currency": wallet.currency,
                 "balance": str(wallet.balance),
+                "utxo_count": len(self.utxos.get(wallet.wallet_id, [])),
                 "auth_token": wallet.auth_token,
                 "token_issued_at": wallet.token_issued_at,
                 "token_expires_at": wallet.token_issued_at + 10,
@@ -720,6 +852,7 @@ class MultiUserWalletLedger:
             "wallets": self.list_wallets(),
             "policies": self.list_user_policies(),
             "risk_profiles": self.list_user_risk_profiles(),
+            "utxos": self.list_utxos(),
             "transfers": list(self.transfers),
             "alerts": list(self.alerts),
         }
@@ -750,6 +883,7 @@ class MultiUserWalletLedger:
             record = WalletRecord(
                 wallet_id=wallet_id,
                 user_id=user_id,
+                model=cls._normalize_model(wallet.get("model", "ACCOUNT")) or "ACCOUNT",
                 currency=str(wallet.get("currency", "USDX")),
                 balance=normalize_amount(wallet.get("balance", "0")),
                 auth_token=str(wallet.get("auth_token", cls._build_wallet_token(12))),
@@ -757,7 +891,23 @@ class MultiUserWalletLedger:
                 created_at=str(wallet.get("created_at", cls._timestamp())),
             )
             ledger.wallets[wallet_id] = record
+            ledger.utxos[wallet_id] = []
             ledger.user_wallets[user_id].append(wallet_id)
+
+        for utxo in snapshot.get("utxos", []):
+            wallet_id = str(utxo.get("wallet_id", "")).strip()
+            if not wallet_id or wallet_id not in ledger.wallets:
+                continue
+            ledger.utxos.setdefault(wallet_id, []).append(
+                {
+                    "utxo_id": str(utxo.get("utxo_id", cls._build_utxo_id())),
+                    "wallet_id": wallet_id,
+                    "currency": str(utxo.get("currency", ledger.wallets[wallet_id].currency)),
+                    "amount": str(normalize_amount(utxo.get("amount", "0"))),
+                    "source": str(utxo.get("source", "")),
+                    "created_at": str(utxo.get("created_at", cls._timestamp())),
+                }
+            )
 
         for policy in snapshot.get("policies", []):
             user_id = str(policy.get("user_id", "")).strip()
@@ -839,6 +989,7 @@ class MultiUserWalletLedger:
                 {
                     "transfer_id": str(item.get("transfer_id", "")),
                     "type": transfer_type,
+                    "model": cls._normalize_model(item.get("model", "ACCOUNT")) or "ACCOUNT",
                     "sender_wallet": sender_wallet,
                     "receiver_wallet": str(item.get("receiver_wallet", "")),
                     "amount": str(normalize_amount(item.get("amount", "0"))),
@@ -859,6 +1010,9 @@ class MultiUserWalletLedger:
             nonce = int(str(transfer.get("nonce", "0")))
             if sender_wallet:
                 ledger.wallet_nonces[sender_wallet] = max(ledger.wallet_nonces.get(sender_wallet, 0), nonce)
+
+        for wallet_id in ledger.wallets.keys():
+            ledger._sync_wallet_balance(wallet_id)
 
         ledger.alerts = [
             {

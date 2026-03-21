@@ -55,6 +55,7 @@ def main() -> None:
     cmd_wallet.add_argument("--user-id", required=True)
     cmd_wallet.add_argument("--wallet-id", default="")
     cmd_wallet.add_argument("--currency", default="USDX")
+    cmd_wallet.add_argument("--model", default="ACCOUNT", choices=["ACCOUNT", "UTXO", "account", "utxo"])
 
     cmd_mint = subparsers.add_parser("mint", help="Mint funds into a wallet")
     _add_json_flag(cmd_mint)
@@ -82,6 +83,10 @@ def main() -> None:
     cmd_wallets = subparsers.add_parser("list-wallets", help="List wallets")
     _add_json_flag(cmd_wallets)
     cmd_wallets.add_argument("--user-id", default="")
+
+    cmd_utxos = subparsers.add_parser("list-utxos", help="List UTXOs (all or by wallet)")
+    _add_json_flag(cmd_utxos)
+    cmd_utxos.add_argument("--wallet-id", default="")
 
     cmd_snapshot = subparsers.add_parser("snapshot", help="Get full ledger snapshot")
     _add_json_flag(cmd_snapshot)
@@ -144,7 +149,12 @@ def main() -> None:
             result = ledger.create_user(args.user_id, args.display_name)
             mutate = True
         elif args.command == "create-wallet":
-            result = ledger.create_wallet(args.user_id, wallet_id=args.wallet_id, currency=args.currency)
+            result = ledger.create_wallet(
+                args.user_id,
+                wallet_id=args.wallet_id,
+                currency=args.currency,
+                model=args.model,
+            )
             mutate = True
         elif args.command == "mint":
             result = ledger.mint(args.wallet_id, args.amount, reference=args.reference)
@@ -169,6 +179,8 @@ def main() -> None:
             result = ledger.list_users()
         elif args.command == "list-wallets":
             result = ledger.list_wallets(user_id=args.user_id)
+        elif args.command == "list-utxos":
+            result = ledger.list_utxos(wallet_id=args.wallet_id)
         elif args.command == "snapshot":
             result = ledger.state_snapshot()
         elif args.command == "list-revisions":
