@@ -41,3 +41,18 @@ def test_account_compliance_pass(account_module):
 
     report = chain.audit_compliance("LOT-1")
     assert report["status"] == "PASS"
+
+
+def test_account_compliance_profile_for_cacao(account_module):
+    chain = account_module.AccountBased_Blockchain()
+    chain.create_account("owner", 0)
+    chain.register_lot("LOT-CACAO-1", "owner", "CACAO", "Tumaco")
+    chain.issue_certificate("LOT-CACAO-1", "Origen", "INVIMA")
+
+    chain.record_logistics_event("LOT-CACAO-1", "COSECHA", "Finca", "Tumaco")
+    chain.record_logistics_event("LOT-CACAO-1", "FERMENTACION", "Planta", "Tumaco")
+    chain.record_logistics_event("LOT-CACAO-1", "EXPORTACION", "Puerto", "Buenaventura")
+
+    report = chain.audit_compliance("LOT-CACAO-1")
+    assert report["status"] == "PASS"
+    assert "FERMENTACION" in report["required_events"]
