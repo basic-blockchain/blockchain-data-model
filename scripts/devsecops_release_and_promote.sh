@@ -93,7 +93,7 @@ create_pr_if_needed() {
 
   local output
   set +e
-  output="$(${GH_BIN} pr create \
+  output="$("${GH_BIN}" pr create \
     --repo "${ORG}/${REPO}" \
     --base "$target" \
     --head "$source" \
@@ -121,7 +121,7 @@ merge_pr_with_retry() {
 
   while true; do
     local state
-    state="$(${GH_BIN} pr view "$pr_number" --repo "${ORG}/${REPO}" --json state --jq '.state')"
+    state="$("${GH_BIN}" pr view "$pr_number" --repo "${ORG}/${REPO}" --json state --jq '.state')"
     if [[ "$state" == "MERGED" || "$state" == "CLOSED" ]]; then
       echo "PR #${pr_number} already closed (${state})."
       return 0
@@ -129,7 +129,7 @@ merge_pr_with_retry() {
 
     set +e
     local output
-    output="$(${GH_BIN} pr merge "$pr_number" --repo "${ORG}/${REPO}" --merge 2>&1)"
+    output="$("${GH_BIN}" pr merge "$pr_number" --repo "${ORG}/${REPO}" --merge 2>&1)"
     local status=$?
     set -e
 
