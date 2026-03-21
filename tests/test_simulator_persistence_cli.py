@@ -38,6 +38,10 @@ def test_cli_persist_list_show_utxo(tmp_path):
 
     persist_payload = json.loads(persist.stdout)
     assert len(persist_payload["persisted_runs"]) == 1
+    metrics = persist_payload["results"][0]["metrics"]
+    assert metrics["total_events"] > 0
+    assert metrics["total_transactions"] > 0
+    assert metrics["execution_ms"] >= 0
     run_id = persist_payload["persisted_runs"][0]["run_id"]
 
     listed = _run_simulator(
@@ -76,3 +80,5 @@ def test_cli_persist_list_show_utxo(tmp_path):
     assert shown_payload["run_id"] == run_id
     assert shown_payload["payload"]["model"] == "utxo"
     assert shown_payload["source_model"] == "utxo"
+    shown_metrics = shown_payload["payload"]["results"][0]["metrics"]
+    assert "finalized_transactions" in shown_metrics
