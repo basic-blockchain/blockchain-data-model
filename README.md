@@ -73,6 +73,9 @@ English docs:
 - docs/en/README.md
 - docs/en/SYSTEM_DOCUMENTATION.md
 
+Operational guide with JSON update matrix and multiuser CLI examples:
+- docs/MODEL_SIMULATION_GUIDE.md
+
 ## Versioning, Tags, and Releases
 
 This repository uses semantic versioning for public delivery tags:
