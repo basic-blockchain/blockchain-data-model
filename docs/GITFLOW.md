@@ -65,6 +65,51 @@ Optional env vars:
 - `POLL_SECONDS` (default: `15`)
 - `GH_BIN` (explicit path for GitHub CLI)
 
+## Tags and releases standard
+
+Tag policy:
+- all production releases must use annotated tags.
+- use semantic versioning: `vMAJOR.MINOR.PATCH`.
+- patch tags are for fixes, docs hardening, and CI/CD automation reliability.
+
+Release notes policy:
+- always write notes in a markdown file and publish with `--notes-file`.
+- do not pass multi-line notes inline with escaped newlines.
+- required sections:
+	- `Summary`
+	- `Included`
+	- `Validation`
+	- `Next`
+
+Patch release command set:
+
+```bash
+git checkout main
+git pull --ff-only origin main
+git tag -a v1.0.1 -m "Patch release v1.0.1"
+git push origin v1.0.1
+gh release create v1.0.1 --repo basic-blockchain/blockchain-data-model --title "v1.0.1" --notes-file docs/releases/v1.0.1.md
+```
+
+Release note template:
+
+```markdown
+## Summary
+Short statement of the release objective.
+
+## Included
+- item 1
+- item 2
+- item 3
+
+## Validation
+- CI Pull Request: pass
+- branch promotion chain: pass
+
+## Next
+- next planned phase
+```
+
 Examples:
 
 ```bash
