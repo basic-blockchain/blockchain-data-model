@@ -124,15 +124,15 @@ def test_cli_policy_commands_and_transfer_block(tmp_path):
         cwd=repo_root,
     ).returncode == 0
     assert _run_cli(
-        ["--store-file", str(store_file), "create-wallet", "--user-id", "u1", "--wallet-id", "w1"],
+        ["--store-file", str(store_file), "create-wallet", "--user-id", "u1", "--wallet-id", "wallet_user_alpha_01"],
         cwd=repo_root,
     ).returncode == 0
     assert _run_cli(
-        ["--store-file", str(store_file), "create-wallet", "--user-id", "u2", "--wallet-id", "w2"],
+        ["--store-file", str(store_file), "create-wallet", "--user-id", "u2", "--wallet-id", "wallet_user_bravo_02"],
         cwd=repo_root,
     ).returncode == 0
     assert _run_cli(
-        ["--store-file", str(store_file), "mint", "--wallet-id", "w1", "--amount", "15"],
+        ["--store-file", str(store_file), "mint", "--wallet-id", "wallet_user_alpha_01", "--amount", "15"],
         cwd=repo_root,
     ).returncode == 0
 
@@ -165,9 +165,9 @@ def test_cli_policy_commands_and_transfer_block(tmp_path):
             str(store_file),
             "transfer",
             "--from-wallet",
-            "w1",
+            "wallet_user_alpha_01",
             "--to-wallet",
-            "w2",
+            "wallet_user_bravo_02",
             "--amount",
             "5",
             "--json",
@@ -208,15 +208,15 @@ def test_cli_risk_profile_and_alerts_commands(tmp_path):
         cwd=repo_root,
     ).returncode == 0
     assert _run_cli(
-        ["--store-file", str(store_file), "create-wallet", "--user-id", "u1", "--wallet-id", "w1"],
+        ["--store-file", str(store_file), "create-wallet", "--user-id", "u1", "--wallet-id", "wallet_user_alpha_01"],
         cwd=repo_root,
     ).returncode == 0
     assert _run_cli(
-        ["--store-file", str(store_file), "create-wallet", "--user-id", "u2", "--wallet-id", "w2"],
+        ["--store-file", str(store_file), "create-wallet", "--user-id", "u2", "--wallet-id", "wallet_user_bravo_02"],
         cwd=repo_root,
     ).returncode == 0
     assert _run_cli(
-        ["--store-file", str(store_file), "mint", "--wallet-id", "w1", "--amount", "20"],
+        ["--store-file", str(store_file), "mint", "--wallet-id", "wallet_user_alpha_01", "--amount", "20"],
         cwd=repo_root,
     ).returncode == 0
 
@@ -254,9 +254,9 @@ def test_cli_risk_profile_and_alerts_commands(tmp_path):
             str(store_file),
             "transfer",
             "--from-wallet",
-            "w1",
+            "wallet_user_alpha_01",
             "--to-wallet",
-            "w2",
+            "wallet_user_bravo_02",
             "--amount",
             "6",
             "--json",
@@ -273,3 +273,39 @@ def test_cli_risk_profile_and_alerts_commands(tmp_path):
     assert alerts_payload["success"] is True
     assert len(alerts_payload["result"]) == 1
     assert alerts_payload["result"][0]["type"] == "TRANSFER_THRESHOLD"
+
+
+def test_cli_create_wallet_rejects_invalid_wallet_id(tmp_path):
+    repo_root = Path(__file__).resolve().parents[1]
+    store_file = tmp_path / "wallet-ledger.json"
+
+    assert _run_cli(
+        [
+            "--store-file",
+            str(store_file),
+            "create-user",
+            "--user-id",
+            "u1",
+            "--display-name",
+            "User One",
+        ],
+        cwd=repo_root,
+    ).returncode == 0
+
+    out = _run_cli(
+        [
+            "--store-file",
+            str(store_file),
+            "create-wallet",
+            "--user-id",
+            "u1",
+            "--wallet-id",
+            "ab",
+            "--json",
+        ],
+        cwd=repo_root,
+    )
+    assert out.returncode == 1
+    payload = json.loads(out.stdout)
+    assert payload["success"] is False
+    assert "Wallet invalida" in payload["result"]

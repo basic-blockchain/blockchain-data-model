@@ -11,13 +11,13 @@ def test_store_roundtrip(tmp_path):
     ledger = MultiUserWalletLedger()
     ledger.create_user("u-1", "User One")
     ledger.create_user("u-2", "User Two")
-    ledger.create_wallet("u-1", wallet_id="w-1")
-    ledger.create_wallet("u-2", wallet_id="w-2")
-    ledger.mint("w-1", "10")
+    ledger.create_wallet("u-1", wallet_id="wallet_user_alpha_01")
+    ledger.create_wallet("u-2", wallet_id="wallet_user_bravo_02")
+    ledger.mint("wallet_user_alpha_01", "10")
     ledger.set_user_policy("u-1", can_transfer=False, daily_limit="25")
     ledger.set_user_policy("u-1", can_transfer=True)
     ledger.set_user_risk_profile("u-1", profile_name="HIGH", transfer_alert_threshold="2")
-    ledger.transfer("w-1", "w-2", "2", fee="0")
+    ledger.transfer("wallet_user_alpha_01", "wallet_user_bravo_02", "2", fee="0")
 
     revision_id = store.save_ledger(ledger)
     assert revision_id.startswith("rev-")
@@ -28,8 +28,8 @@ def test_store_roundtrip(tmp_path):
     assert len(snapshot["users"]) == 2
     assert len(snapshot["wallets"]) == 2
     wallet_map = {wallet["wallet_id"]: wallet for wallet in snapshot["wallets"]}
-    assert wallet_map["w-1"]["balance"] == "8.00000000"
-    assert wallet_map["w-2"]["balance"] == "2.00000000"
+    assert wallet_map["wallet_user_alpha_01"]["balance"] == "8.00000000"
+    assert wallet_map["wallet_user_bravo_02"]["balance"] == "2.00000000"
     assert snapshot["policies"][0]["can_transfer"] is True
     assert snapshot["policies"][0]["daily_limit"] == "25.00000000"
     risk_map = {profile["user_id"]: profile for profile in snapshot["risk_profiles"]}
