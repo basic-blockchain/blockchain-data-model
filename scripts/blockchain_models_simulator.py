@@ -11,8 +11,11 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_STORE_DIR = ROOT / "data" / "simulation-runs"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+from persistence.simulation_store import JsonSimulationStore
 
 
 def load_module(module_name: str, file_name: str):
@@ -45,6 +48,73 @@ def _print_header(title: str) -> None:
     print("\n" + "=" * 72)
     print(title)
     print("=" * 72)
+
+
+def _store_for_model(model: str, store_dir: Path) -> JsonSimulationStore:
+    model_file = f"{model}-runs.json"
+    return JsonSimulationStore(store_dir / model_file)
+
+
+def persist_results(results: list[dict], requested_model: str, scenario: str, store_dir: Path) -> list[dict]:
+    persisted = []
+    for result in results:
+        model = result["model"]
+        store = _store_for_model(model, store_dir)
+        payload = {
+            "model": model,
+            "scenario": scenario,
+            "requested_model": requested_model,
+            "results": [_to_jsonable(result)],
+        }
+        run_id = store.save_run(payload)
+        persisted.append(
+            {
+                "model": model,
+                "run_id": run_id,
+                "store_file": str((store_dir / f"{model}-runs.json").resolve()),
+            }
+        )
+    return persisted
+
+
+def list_persisted_runs(store_dir: Path, model: str, limit: int) -> list[dict]:
+    models = ["utxo", "account"] if model == "both" else [model]
+    collected = []
+    for selected_model in models:
+        store = _store_for_model(selected_model, store_dir)
+        for item in store.list_runs(limit=limit):
+            item["source_model"] = selected_model
+            collected.append(item)
+
+    collected.sort(key=lambda row: row.get("created_at", ""), reverse=True)
+    if limit > 0:
+        return collected[:limit]
+    return collected
+
+
+def get_persisted_run(store_dir: Path, run_id: str, model: str) -> dict | None:
+    models = ["utxo", "account"] if model == "both" else [model]
+    for selected_model in models:
+        store = _store_for_model(selected_model, store_dir)
+        record = store.get_run(run_id)
+        if record is not None:
+            record["source_model"] = selected_model
+            record["store_file"] = str((store_dir / f"{selected_model}-runs.json").resolve())
+            return record
+    return None
+
+
+def print_runs_summary(runs: list[dict]) -> None:
+    if not runs:
+        print("No hay corridas persistidas.")
+        return
+    _print_header("CORRIDAS PERSISTIDAS")
+    for row in runs:
+        print(
+            f"- run_id={row.get('run_id')} | model={row.get('model')} | "
+            f"scenario={row.get('scenario')} | source={row.get('source_model')} | "
+            f"created_at={row.get('created_at')}"
+        )
 
 
 def run_utxo_coffee_export() -> dict:
@@ -256,15 +326,79 @@ def main() -> None:
         action="store_true",
         help="Salida en JSON estructurado.",
     )
+    parser.add_argument(
+        "--persist",
+        action="store_true",
+        help="Persistir movimientos/resultados en JSON por modelo.",
+    )
+    parser.add_argument(
+        "--store-dir",
+        default=str(DEFAULT_STORE_DIR),
+        help="Directorio de persistencia JSON (separado por modelo).",
+    )
+    parser.add_argument(
+        "--list-runs",
+        action="store_true",
+        help="Listar corridas persistidas.",
+    )
+    parser.add_argument(
+        "--show-run-id",
+        default="",
+        help="Mostrar detalle de una corrida persistida por run_id.",
+    )
+    parser.add_argument(
+        "--run-model",
+        choices=["utxo", "account", "both"],
+        default="both",
+        help="Filtro de modelo para listado/consulta de corridas persistidas.",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=20,
+        help="Cantidad de corridas a listar.",
+    )
 
     args = parser.parse_args()
+    store_dir = Path(args.store_dir)
+
+    if args.list_runs:
+        runs = list_persisted_runs(store_dir, args.run_model, args.limit)
+        if args.json:
+            print(json.dumps(_to_jsonable(runs), indent=2, ensure_ascii=False))
+            return
+        print_runs_summary(runs)
+        return
+
+    if args.show_run_id:
+        run = get_persisted_run(store_dir, args.show_run_id, args.run_model)
+        if run is None:
+            print(f"No se encontró run_id={args.show_run_id}.")
+            return
+        print(json.dumps(_to_jsonable(run), indent=2, ensure_ascii=False))
+        return
+
     results = run_scenario(args.model, args.scenario)
+    persisted = []
+    if args.persist:
+        persisted = persist_results(results, args.model, args.scenario, store_dir)
 
     if args.json:
-        print(json.dumps(_to_jsonable(results), indent=2, ensure_ascii=False))
+        payload = {
+            "results": results,
+            "persisted_runs": persisted,
+        }
+        print(json.dumps(_to_jsonable(payload), indent=2, ensure_ascii=False))
         return
 
     print_human_report(results)
+    if persisted:
+        _print_header("PERSISTENCIA JSON")
+        for item in persisted:
+            print(
+                f"- model={item['model']} | run_id={item['run_id']} | "
+                f"store_file={item['store_file']}"
+            )
 
 
 if __name__ == "__main__":

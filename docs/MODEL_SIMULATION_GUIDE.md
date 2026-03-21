@@ -34,6 +34,32 @@ py scripts/blockchain_models_simulator.py --scenario retail-payments --model acc
 py scripts/blockchain_models_simulator.py --scenario coffee-export --model both --json
 ```
 
+## Persistencia JSON (separada por modelo)
+La capa de persistencia se implementa por archivo independiente para no mezclar movimientos:
+- `data/simulation-runs/utxo-runs.json`
+- `data/simulation-runs/account-runs.json`
+
+Guardar resultados y movimientos de una corrida:
+
+```bash
+py scripts/blockchain_models_simulator.py --scenario coffee-export --model both --persist
+py scripts/blockchain_models_simulator.py --scenario retail-payments --model utxo --persist
+```
+
+Consultar corridas persistidas:
+
+```bash
+py scripts/blockchain_models_simulator.py --list-runs --run-model both
+py scripts/blockchain_models_simulator.py --list-runs --run-model utxo --limit 10
+py scripts/blockchain_models_simulator.py --show-run-id <RUN_ID> --run-model account
+```
+
+Directorio personalizado de persistencia:
+
+```bash
+py scripts/blockchain_models_simulator.py --scenario coffee-export --model account --persist --store-dir data/my-runs
+```
+
 ## Nota sobre el módulo de observabilidad
 El módulo de observabilidad de agentes (`scripts/dev_team_console.py`) se mantiene como plus/MVP opcional.
 No es el núcleo del sistema de simulación de modelos blockchain.
