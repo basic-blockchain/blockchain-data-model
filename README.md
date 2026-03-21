@@ -40,6 +40,15 @@ py scripts/blockchain_models_simulator.py --list-runs --run-model both
 py scripts/blockchain_models_simulator.py --show-run-id <RUN_ID> --run-model account
 ```
 
+Multi-user wallet flow (new iteration):
+
+```bash
+py scripts/multiuser_wallet_cli.py create-user --user-id u-alice --display-name "Alice"
+py scripts/multiuser_wallet_cli.py create-wallet --user-id u-alice --wallet-id w-alice
+py scripts/multiuser_wallet_cli.py mint --wallet-id w-alice --amount 100
+py scripts/multiuser_wallet_cli.py snapshot --json
+```
+
 Run tests:
 
 ```bash
@@ -63,6 +72,9 @@ Spanish docs:
 English docs:
 - docs/en/README.md
 - docs/en/SYSTEM_DOCUMENTATION.md
+
+Operational guide with JSON update matrix and multiuser CLI examples:
+- docs/MODEL_SIMULATION_GUIDE.md
 
 ## Versioning, Tags, and Releases
 
