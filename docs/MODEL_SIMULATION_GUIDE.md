@@ -76,3 +76,44 @@ En modo `--json`, estas métricas viajan dentro de cada elemento de `results`.
 ## Nota sobre el módulo de observabilidad
 El módulo de observabilidad de agentes (`scripts/dev_team_console.py`) se mantiene como plus/MVP opcional.
 No es el núcleo del sistema de simulación de modelos blockchain.
+
+## Cuándo se actualiza cada JSON
+
+| Componente | Comando / Acción | ¿Actualiza JSON? | Archivo |
+|---|---|---|---|
+| Simulador UTXO/Account | run con `--persist` | Sí | `data/simulation-runs/utxo-runs.json`, `data/simulation-runs/account-runs.json` |
+| Simulador UTXO/Account | run sin `--persist` | No | No aplica |
+| Simulador UTXO/Account | `--list-runs` | No | Solo lectura |
+| Simulador UTXO/Account | `--show-run-id` | No | Solo lectura |
+| Multiusuario CLI | `create-user` | Sí | `data/multiuser/wallet-ledger.json` |
+| Multiusuario CLI | `create-wallet` | Sí | `data/multiuser/wallet-ledger.json` |
+| Multiusuario CLI | `mint` | Sí | `data/multiuser/wallet-ledger.json` |
+| Multiusuario CLI | `transfer` | Sí | `data/multiuser/wallet-ledger.json` |
+| Multiusuario CLI | `balance` | No | Solo lectura |
+| Multiusuario CLI | `list-users` | No | Solo lectura |
+| Multiusuario CLI | `list-wallets` | No | Solo lectura |
+| Multiusuario CLI | `snapshot` | No | Solo lectura |
+| Multiusuario CLI | `list-revisions` | No | Solo lectura |
+
+## Ejemplos de uso (multiusuario)
+
+```bash
+# 1) Crear usuarios
+py scripts/multiuser_wallet_cli.py --store-file data/multiuser/wallet-ledger.json create-user --user-id u-alice --display-name "Alice" --json
+py scripts/multiuser_wallet_cli.py --store-file data/multiuser/wallet-ledger.json create-user --user-id u-bob --display-name "Bob" --json
+
+# 2) Crear wallets
+py scripts/multiuser_wallet_cli.py --store-file data/multiuser/wallet-ledger.json create-wallet --user-id u-alice --wallet-id w-alice --json
+py scripts/multiuser_wallet_cli.py --store-file data/multiuser/wallet-ledger.json create-wallet --user-id u-bob --wallet-id w-bob --json
+
+# 3) Fondear wallet
+py scripts/multiuser_wallet_cli.py --store-file data/multiuser/wallet-ledger.json mint --wallet-id w-alice --amount 100 --json
+
+# 4) Transferir entre wallets
+py scripts/multiuser_wallet_cli.py --store-file data/multiuser/wallet-ledger.json transfer --from-wallet w-alice --to-wallet w-bob --amount 15 --fee 0.5 --reference invoice-1001 --json
+
+# 5) Consultar estado
+py scripts/multiuser_wallet_cli.py --store-file data/multiuser/wallet-ledger.json balance --wallet-id w-bob --json
+py scripts/multiuser_wallet_cli.py --store-file data/multiuser/wallet-ledger.json snapshot --json
+py scripts/multiuser_wallet_cli.py --store-file data/multiuser/wallet-ledger.json list-revisions --limit 10 --json
+```

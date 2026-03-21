@@ -2,3 +2,4 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 data/simulation-runs/*.json
+data/multiuser/*.json
