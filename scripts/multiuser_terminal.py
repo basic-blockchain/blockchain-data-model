@@ -129,7 +129,15 @@ def _print_banner() -> None:
         print(f"  {_yellow(left)}  {_cyan(right)}")
 
     print()
-    print(_dim("  UTXO & Account-based models  •  JSON / PostgreSQL persistence"))
+    from config.settings import get_settings
+    _settings = get_settings()
+    _backend = _settings.persistence_backend.upper()
+    if _backend == "POSTGRES":
+        _db_name = _settings.pg_dsn.rsplit("/", 1)[-1] if "/" in _settings.pg_dsn else "?"
+        backend_label = _green(f"PostgreSQL ({_db_name})")
+    else:
+        backend_label = _yellow("JSON (local files)")
+    print(f"  {_dim('Backend:')} {backend_label}    {_dim('Models:')} UTXO & Account-based")
     print(_dim("  Ingresa el numero de opcion y presiona Enter. Escribe 0 para salir."))
     print()
 
