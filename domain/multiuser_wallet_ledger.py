@@ -29,11 +29,20 @@ class WalletRecord:
     created_at: str
 
 
+@dataclass
+class UserPolicyRecord:
+    user_id: str
+    can_transfer: bool
+    daily_limit: Decimal | None
+    updated_at: str
+
+
 class MultiUserWalletLedger:
     def __init__(self):
         self.users: dict[str, UserRecord] = {}
         self.wallets: dict[str, WalletRecord] = {}
         self.user_wallets: dict[str, list[str]] = {}
+        self.user_policies: dict[str, UserPolicyRecord] = {}
         self.transfers: list[dict] = []
 
     @staticmethod
@@ -60,7 +69,78 @@ class MultiUserWalletLedger:
             created_at=self._timestamp(),
         )
         self.user_wallets[user_id] = []
+        self.user_policies[user_id] = UserPolicyRecord(
+            user_id=user_id,
+            can_transfer=True,
+            daily_limit=None,
+            updated_at=self._timestamp(),
+        )
         return f"Usuario {user_id} creado."
+
+    def set_user_policy(
+        self,
+        user_id: str,
+        can_transfer: bool | None = None,
+        daily_limit: Decimal | int | float | str | None = None,
+    ) -> str:
+        if user_id not in self.users:
+            return f"Error: el usuario {user_id} no existe."
+
+        policy = self.user_policies.get(
+            user_id,
+            UserPolicyRecord(
+                user_id=user_id,
+                can_transfer=True,
+                daily_limit=None,
+                updated_at=self._timestamp(),
+            ),
+        )
+
+        if can_transfer is not None:
+            policy.can_transfer = bool(can_transfer)
+
+        if daily_limit is not None:
+            limit_value = normalize_amount(daily_limit)
+            if limit_value <= 0:
+                return "Error: daily_limit debe ser mayor a cero cuando se define."
+            policy.daily_limit = limit_value
+
+        policy.updated_at = self._timestamp()
+        self.user_policies[user_id] = policy
+        return f"Política de usuario {user_id} actualizada."
+
+    def get_user_policy(self, user_id: str) -> dict:
+        policy = self.user_policies.get(user_id)
+        if policy is None:
+            return {
+                "user_id": user_id,
+                "can_transfer": True,
+                "daily_limit": None,
+                "updated_at": "",
+            }
+        return {
+            "user_id": policy.user_id,
+            "can_transfer": policy.can_transfer,
+            "daily_limit": str(policy.daily_limit) if policy.daily_limit is not None else None,
+            "updated_at": policy.updated_at,
+        }
+
+    def list_user_policies(self) -> list[dict]:
+        return [self.get_user_policy(user_id) for user_id in self.users.keys()]
+
+    def _daily_transfer_total(self, user_id: str, day_prefix: str) -> Decimal:
+        wallet_ids = set(self.user_wallets.get(user_id, []))
+        total = Decimal("0")
+        for transfer in self.transfers:
+            if transfer.get("type") != "TRANSFER":
+                continue
+            if transfer.get("sender_wallet") not in wallet_ids:
+                continue
+            created_at = str(transfer.get("created_at", ""))
+            if not created_at.startswith(day_prefix):
+                continue
+            total += normalize_amount(transfer.get("amount", "0"))
+        return total
 
     def create_wallet(self, user_id: str, wallet_id: str = "", currency: str = "USDX") -> str:
         if user_id not in self.users:
@@ -130,6 +210,28 @@ class MultiUserWalletLedger:
         if sender.currency != receiver.currency:
             return "Error: transfer entre wallets de distinta moneda no soportada."
 
+        sender_policy = self.user_policies.get(
+            sender.user_id,
+            UserPolicyRecord(
+                user_id=sender.user_id,
+                can_transfer=True,
+                daily_limit=None,
+                updated_at=self._timestamp(),
+            ),
+        )
+        if not sender_policy.can_transfer:
+            return "Error: política de usuario impide transferencias para este emisor."
+
+        if sender_policy.daily_limit is not None:
+            day_prefix = self._timestamp()[:10]
+            day_total = self._daily_transfer_total(sender.user_id, day_prefix)
+            projected_total = day_total + transfer_amount
+            if projected_total > sender_policy.daily_limit:
+                return (
+                    "Error: límite diario excedido. "
+                    f"Actual={day_total}, Intento={transfer_amount}, Límite={sender_policy.daily_limit}."
+                )
+
         total_cost = transfer_amount + tx_fee
         if sender.balance < total_cost:
             return (
@@ -193,6 +295,7 @@ class MultiUserWalletLedger:
         return {
             "users": self.list_users(),
             "wallets": self.list_wallets(),
+            "policies": self.list_user_policies(),
             "transfers": list(self.transfers),
         }
 
@@ -228,6 +331,30 @@ class MultiUserWalletLedger:
             )
             ledger.wallets[wallet_id] = record
             ledger.user_wallets[user_id].append(wallet_id)
+
+        for policy in snapshot.get("policies", []):
+            user_id = str(policy.get("user_id", "")).strip()
+            if not user_id or user_id not in ledger.users:
+                continue
+            raw_limit = policy.get("daily_limit", None)
+            daily_limit = None
+            if raw_limit not in (None, "", "null"):
+                daily_limit = normalize_amount(raw_limit)
+            ledger.user_policies[user_id] = UserPolicyRecord(
+                user_id=user_id,
+                can_transfer=bool(policy.get("can_transfer", True)),
+                daily_limit=daily_limit,
+                updated_at=str(policy.get("updated_at", cls._timestamp())),
+            )
+
+        for user_id in ledger.users.keys():
+            if user_id not in ledger.user_policies:
+                ledger.user_policies[user_id] = UserPolicyRecord(
+                    user_id=user_id,
+                    can_transfer=True,
+                    daily_limit=None,
+                    updated_at=cls._timestamp(),
+                )
 
         ledger.transfers = [
             {
