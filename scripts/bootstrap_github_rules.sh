@@ -39,6 +39,8 @@ gh api -X PUT repos/${ORG}/${REPO}/branches/main/protection \
   -H "Accept: application/vnd.github+json" \
   -f required_status_checks.strict=true \
   -f required_status_checks.contexts[]="${REQUIRED_CHECK}" \
+  -f required_status_checks.contexts[]='Security PR Checks / secret-scan' \
+  -f required_status_checks.contexts[]='Merge Policy Guard / enforce-merge-policy' \
   -f enforce_admins=true \
   -f required_pull_request_reviews.dismiss_stale_reviews=true \
   -f required_pull_request_reviews.require_code_owner_reviews=true \
@@ -50,6 +52,7 @@ gh api -X PUT repos/${ORG}/${REPO}/branches/develop/protection \
   -H "Accept: application/vnd.github+json" \
   -f required_status_checks.strict=true \
   -f required_status_checks.contexts[]="${REQUIRED_CHECK}" \
+  -f required_status_checks.contexts[]='Security PR Checks / secret-scan' \
   -f enforce_admins=true \
   -f required_pull_request_reviews.dismiss_stale_reviews=true \
   -f required_pull_request_reviews.require_code_owner_reviews=true \
