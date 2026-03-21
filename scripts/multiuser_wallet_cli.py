@@ -15,6 +15,67 @@ from domain.multiuser_wallet_ledger import MultiUserWalletLedger
 from persistence.multiuser_wallet_store import JsonMultiUserWalletStore
 
 
+def _supports_ansi() -> bool:
+    return sys.stdout.isatty() and sys.stderr.isatty()
+
+
+def _style(text: str, code: str) -> str:
+    if not _supports_ansi():
+        return text
+    return f"\033[{code}m{text}\033[0m"
+
+
+def _print_alert(kind: str, title: str, message: str | None = None, *, stream=None) -> None:
+    color = "1;31" if kind == "ERROR" else "1;32"
+    out = stream if stream is not None else sys.stdout
+    header = f"[{kind}] {title}"
+    border = "+" + "-" * 76 + "+"
+    print(_style(border, color), file=out)
+    print(_style(f"| {header:<74} |", color), file=out)
+    if message:
+        body = f"Mensaje: {message}"
+        print(_style(f"| {body:<74} |", color), file=out)
+    print(_style(border, color), file=out)
+
+
+def _wants_json_from_argv() -> bool:
+    return "--json" in sys.argv[1:]
+
+
+def _compact_alert_message(result) -> str | None:
+    if isinstance(result, dict):
+        for key in ("message", "mensaje"):
+            value = result.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return None
+    if isinstance(result, str):
+        cleaned = result.strip()
+        if cleaned.lower().startswith("error:"):
+            cleaned = cleaned[6:].strip()
+        return cleaned if cleaned else None
+    return None
+
+
+class CliArgumentParser(argparse.ArgumentParser):
+    def error(self, message):
+        if _wants_json_from_argv():
+            _print_alert("ERROR", "invalid-arguments", message, stream=sys.stderr)
+            _print_json(
+                {
+                    "success": False,
+                    "error": message,
+                    "error_type": "ArgumentError",
+                    "revision_id": "",
+                    "store_file": str(DEFAULT_STORE.resolve()),
+                }
+            )
+        else:
+            _print_alert("ERROR", "invalid-arguments", message, stream=sys.stderr)
+            self.print_usage(sys.stderr)
+        raise SystemExit(2)
+
+
 def _print_json(payload: dict | list) -> None:
     print(json.dumps(payload, indent=2, ensure_ascii=False))
 
@@ -39,7 +100,7 @@ def _parse_optional_bool(value: str) -> bool:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Multi-user wallet ledger CLI")
+    parser = CliArgumentParser(description="Multi-user wallet ledger CLI")
     parser.add_argument("--store-file", default=str(DEFAULT_STORE), help="Path to the JSON ledger store")
     parser.add_argument("--json", action="store_true", help="JSON output mode")
 
@@ -246,6 +307,10 @@ def main() -> None:
         if isinstance(result, dict) and "valid" in result and not bool(result["valid"]):
             success = False
         if output_json:
+            if not success:
+                _print_alert("ERROR", args.command, _compact_alert_message(result), stream=sys.stderr)
+            else:
+                _print_alert("SUCCESS", args.command, _compact_alert_message(result), stream=sys.stderr)
             payload = {
                 "success": success,
                 "result": result,
@@ -255,9 +320,12 @@ def main() -> None:
             _print_json(payload)
             sys.exit(0 if success else 1)
 
-        print(result)
-        if revision_id:
-            print(f"revision_id={revision_id}")
+        if success:
+            _print_alert("SUCCESS", args.command, _compact_alert_message(result))
+            if revision_id:
+                print(f"revision_id={revision_id}")
+        else:
+            _print_alert("ERROR", args.command, _compact_alert_message(result), stream=sys.stderr)
         sys.exit(0 if success else 1)
     except Exception as exc:
         if output_json:
@@ -271,7 +339,7 @@ def main() -> None:
                 }
             )
         else:
-            print(f"Error: {exc}", file=sys.stderr)
+            _print_alert("ERROR", "exception", str(exc), stream=sys.stderr)
         sys.exit(1)
 
 
