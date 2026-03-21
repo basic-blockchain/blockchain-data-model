@@ -11,13 +11,19 @@ def test_store_roundtrip(tmp_path):
     ledger = MultiUserWalletLedger()
     ledger.create_user("u-1", "User One")
     ledger.create_user("u-2", "User Two")
-    ledger.create_wallet("u-1", wallet_id="wallet_user_alpha_01")
+    created_u1 = ledger.create_wallet("u-1", wallet_id="wallet_user_alpha_01")
     ledger.create_wallet("u-2", wallet_id="wallet_user_bravo_02")
     ledger.mint("wallet_user_alpha_01", "10")
     ledger.set_user_policy("u-1", can_transfer=False, daily_limit="25")
     ledger.set_user_policy("u-1", can_transfer=True)
     ledger.set_user_risk_profile("u-1", profile_name="HIGH", transfer_alert_threshold="2")
-    ledger.transfer("wallet_user_alpha_01", "wallet_user_bravo_02", "2", fee="0")
+    ledger.transfer(
+        "wallet_user_alpha_01",
+        "wallet_user_bravo_02",
+        "2",
+        fee="0",
+        sender_token=created_u1["auth_token"],
+    )
 
     revision_id = store.save_ledger(ledger)
     assert revision_id.startswith("rev-")

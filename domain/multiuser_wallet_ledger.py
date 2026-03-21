@@ -358,7 +358,7 @@ class MultiUserWalletLedger:
             total += normalize_amount(transfer.get("amount", "0"))
         return total
 
-    def create_wallet(self, user_id: str, wallet_id: str = "", currency: str = "USDX") -> str:
+    def create_wallet(self, user_id: str, wallet_id: str = "", currency: str = "USDX") -> str | dict:
         if user_id not in self.users:
             return f"Error: el usuario {user_id} no existe."
 
@@ -379,7 +379,15 @@ class MultiUserWalletLedger:
         )
         self.wallets[final_wallet_id] = wallet
         self.user_wallets[user_id].append(final_wallet_id)
-        return f"Wallet {final_wallet_id} creada para {user_id}."
+        return {
+            "message": f"Wallet {final_wallet_id} creada para {user_id}.",
+            "wallet_id": final_wallet_id,
+            "user_id": user_id,
+            "currency": currency,
+            "auth_token": wallet.auth_token,
+            "token_issued_at": wallet.token_issued_at,
+            "token_expires_at": wallet.token_issued_at + 10,
+        }
 
     def mint(self, wallet_id: str, amount: Decimal | int | float | str, reference: str = "MINT") -> str:
         minted = normalize_amount(amount)
@@ -413,6 +421,7 @@ class MultiUserWalletLedger:
         amount: Decimal | int | float | str,
         fee: Decimal | int | float | str = 0,
         reference: str = "",
+        sender_token: str = "",
     ) -> str:
         transfer_amount = normalize_amount(amount)
         tx_fee = normalize_amount(fee)
@@ -428,10 +437,21 @@ class MultiUserWalletLedger:
 
         sender = self.wallets[sender_wallet]
         receiver = self.wallets[receiver_wallet]
-        self._refresh_wallet_token_if_expired(sender)
         self._refresh_wallet_token_if_expired(receiver)
         if sender.currency != receiver.currency:
             return "Error: transfer entre wallets de distinta moneda no soportada."
+
+        if not sender_token.strip():
+            return "Error: sender_token es requerido para transferir."
+
+        now = self._now_epoch()
+        if now - int(sender.token_issued_at) >= 10:
+            sender.auth_token = self._build_wallet_token(12)
+            sender.token_issued_at = now
+            return "Error: token expirado para wallet emisor. Solicita un nuevo token."
+
+        if sender_token.strip() != sender.auth_token:
+            return "Error: token inválido para wallet emisor."
 
         sender_policy = self.user_policies.get(
             sender.user_id,

@@ -69,6 +69,7 @@ def main() -> None:
     cmd_transfer.add_argument("--amount", required=True)
     cmd_transfer.add_argument("--fee", default="0")
     cmd_transfer.add_argument("--reference", default="")
+    cmd_transfer.add_argument("--sender-token", default="")
 
     cmd_balance = subparsers.add_parser("balance", help="Get wallet balance")
     _add_json_flag(cmd_balance)
@@ -148,6 +149,7 @@ def main() -> None:
                 args.amount,
                 fee=args.fee,
                 reference=args.reference,
+                sender_token=args.sender_token,
             )
             mutate = True
         elif args.command == "balance":
