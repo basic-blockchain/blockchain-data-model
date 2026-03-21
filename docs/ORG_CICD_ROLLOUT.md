@@ -57,6 +57,10 @@ jobs:
   - `scripts/devsecops_org_cli.sh`
 - Batch onboarding report (pre/post snapshot):
   - `scripts/devsecops_org_onboarding.sh`
+- Promotion chain PR automation:
+  - `scripts/devsecops_promotion_chain.sh`
+- GitHub CLI auth helper for Git Bash/Windows:
+  - `scripts/gh_auth_setup.sh`
 
 ## GitHub CLI operational model
 Use `gh` as the standard control plane for organization-wide DevSecOps operations.
@@ -71,6 +75,7 @@ Recommended lifecycle:
 3. Run `bootstrap` without dry-run to apply protections in bulk.
 4. Use `promote-pr` for manual promotions when needed.
 5. Run `onboard` to generate pre/post evidence reports.
+6. Use `promote-chain` to create all promotion PRs in one command.
 
 Core commands:
 
@@ -79,7 +84,19 @@ bash scripts/devsecops_org_cli.sh audit basic-blockchain
 DRY_RUN=true bash scripts/devsecops_org_cli.sh bootstrap basic-blockchain
 bash scripts/devsecops_org_cli.sh bootstrap basic-blockchain
 bash scripts/devsecops_org_cli.sh promote-pr basic-blockchain blockchain-data-model qa develop
+bash scripts/devsecops_org_cli.sh promote-chain basic-blockchain blockchain-data-model
 APPLY_CHANGES=true bash scripts/devsecops_org_cli.sh onboard basic-blockchain
+bash scripts/devsecops_org_cli.sh auth-login
+```
+
+## GitHub CLI authentication from scripts
+If `gh` is not found in Git Bash, use script helpers:
+
+```bash
+bash scripts/gh_auth_setup.sh enable-path
+source ~/.bashrc
+bash scripts/gh_auth_setup.sh login
+bash scripts/gh_auth_setup.sh status
 ```
 
 ## Onboarding evidence reports
