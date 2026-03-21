@@ -69,7 +69,17 @@ class JsonMultiUserWalletStore:
         parsed.setdefault("schema_version", 1)
         parsed.setdefault("updated_at", self._timestamp())
         parsed.setdefault("current_revision_id", "")
-        parsed.setdefault("snapshot", {"users": [], "wallets": [], "transfers": []})
+        parsed.setdefault(
+            "snapshot",
+            {
+                "users": [],
+                "wallets": [],
+                "policies": [],
+                "risk_profiles": [],
+                "transfers": [],
+                "alerts": [],
+            },
+        )
         parsed.setdefault("revisions", [])
         if not isinstance(parsed.get("revisions"), list):
             parsed["revisions"] = []
@@ -99,6 +109,13 @@ class JsonMultiUserWalletStore:
             "schema_version": 1,
             "updated_at": datetime.now(timezone.utc).isoformat(),
             "current_revision_id": "",
-            "snapshot": {"users": [], "wallets": [], "transfers": []},
+            "snapshot": {
+                "users": [],
+                "wallets": [],
+                "policies": [],
+                "risk_profiles": [],
+                "transfers": [],
+                "alerts": [],
+            },
             "revisions": [],
         }

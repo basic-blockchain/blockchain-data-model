@@ -177,3 +177,99 @@ def test_cli_policy_commands_and_transfer_block(tmp_path):
     assert blocked_transfer.returncode == 1
     blocked_payload = json.loads(blocked_transfer.stdout)
     assert blocked_payload["success"] is False
+
+
+def test_cli_risk_profile_and_alerts_commands(tmp_path):
+    repo_root = Path(__file__).resolve().parents[1]
+    store_file = tmp_path / "wallet-ledger.json"
+
+    assert _run_cli(
+        [
+            "--store-file",
+            str(store_file),
+            "create-user",
+            "--user-id",
+            "u1",
+            "--display-name",
+            "User One",
+        ],
+        cwd=repo_root,
+    ).returncode == 0
+    assert _run_cli(
+        [
+            "--store-file",
+            str(store_file),
+            "create-user",
+            "--user-id",
+            "u2",
+            "--display-name",
+            "User Two",
+        ],
+        cwd=repo_root,
+    ).returncode == 0
+    assert _run_cli(
+        ["--store-file", str(store_file), "create-wallet", "--user-id", "u1", "--wallet-id", "w1"],
+        cwd=repo_root,
+    ).returncode == 0
+    assert _run_cli(
+        ["--store-file", str(store_file), "create-wallet", "--user-id", "u2", "--wallet-id", "w2"],
+        cwd=repo_root,
+    ).returncode == 0
+    assert _run_cli(
+        ["--store-file", str(store_file), "mint", "--wallet-id", "w1", "--amount", "20"],
+        cwd=repo_root,
+    ).returncode == 0
+
+    set_risk = _run_cli(
+        [
+            "--store-file",
+            str(store_file),
+            "set-risk-profile",
+            "--user-id",
+            "u1",
+            "--profile-name",
+            "HIGH",
+            "--transfer-alert-threshold",
+            "5",
+            "--daily-alert-threshold",
+            "8",
+            "--json",
+        ],
+        cwd=repo_root,
+    )
+    assert set_risk.returncode == 0, set_risk.stderr
+
+    get_risk = _run_cli(
+        ["--store-file", str(store_file), "get-risk-profile", "--user-id", "u1", "--json"],
+        cwd=repo_root,
+    )
+    risk_payload = json.loads(get_risk.stdout)
+    assert risk_payload["success"] is True
+    assert risk_payload["result"]["profile_name"] == "HIGH"
+    assert risk_payload["result"]["transfer_alert_threshold"] == "5.00000000"
+
+    transfer = _run_cli(
+        [
+            "--store-file",
+            str(store_file),
+            "transfer",
+            "--from-wallet",
+            "w1",
+            "--to-wallet",
+            "w2",
+            "--amount",
+            "6",
+            "--json",
+        ],
+        cwd=repo_root,
+    )
+    assert transfer.returncode == 0, transfer.stderr
+
+    alerts = _run_cli(
+        ["--store-file", str(store_file), "list-alerts", "--user-id", "u1", "--json"],
+        cwd=repo_root,
+    )
+    alerts_payload = json.loads(alerts.stdout)
+    assert alerts_payload["success"] is True
+    assert len(alerts_payload["result"]) == 1
+    assert alerts_payload["result"][0]["type"] == "TRANSFER_THRESHOLD"

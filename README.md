@@ -46,7 +46,9 @@ Multi-user wallet flow (new iteration):
 py scripts/multiuser_wallet_cli.py create-user --user-id u-alice --display-name "Alice"
 py scripts/multiuser_wallet_cli.py create-wallet --user-id u-alice --wallet-id w-alice
 py scripts/multiuser_wallet_cli.py mint --wallet-id w-alice --amount 100
+py scripts/multiuser_wallet_cli.py set-risk-profile --user-id u-alice --profile-name HIGH --transfer-alert-threshold 5 --daily-alert-threshold 20
 py scripts/multiuser_wallet_cli.py snapshot --json
+py scripts/multiuser_wallet_cli.py list-alerts --user-id u-alice --json
 ```
 
 Run tests:
