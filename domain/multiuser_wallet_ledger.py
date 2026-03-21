@@ -56,6 +56,8 @@ class UserRiskProfileRecord:
 
 
 class MultiUserWalletLedger:
+    TOKEN_TTL_SECONDS = 120
+
     def __init__(self):
         self.users: dict[str, UserRecord] = {}
         self.wallets: dict[str, WalletRecord] = {}
@@ -126,12 +128,70 @@ class MultiUserWalletLedger:
     def _build_utxo_id() -> str:
         return f"utxo-{secrets.token_hex(10)}"
 
+    def _new_user_policy(self, user_id: str) -> UserPolicyRecord:
+        return UserPolicyRecord(
+            user_id=user_id,
+            can_transfer=True,
+            daily_limit=None,
+            updated_at=self._timestamp(),
+        )
+
+    def _new_user_risk_profile(self, user_id: str) -> UserRiskProfileRecord:
+        return UserRiskProfileRecord(
+            user_id=user_id,
+            profile_name="STANDARD",
+            daily_limit=None,
+            transfer_alert_threshold=None,
+            daily_alert_threshold=None,
+            updated_at=self._timestamp(),
+        )
+
+    def _rotate_wallet_token(self, wallet: WalletRecord, now: int | None = None) -> None:
+        issue_time = self._now_epoch() if now is None else int(now)
+        wallet.auth_token = self._build_wallet_token(12)
+        wallet.token_issued_at = issue_time
+
+    def _token_payload(self, wallet: WalletRecord) -> dict:
+        return {
+            "auth_token": wallet.auth_token,
+            "token_issued_at": wallet.token_issued_at,
+            "token_expires_at": wallet.token_issued_at + self.TOKEN_TTL_SECONDS,
+        }
+
+    def _token_is_expired(self, wallet: WalletRecord, now: int | None = None) -> bool:
+        check_time = self._now_epoch() if now is None else int(now)
+        return check_time - int(wallet.token_issued_at) >= self.TOKEN_TTL_SECONDS
+
     def _refresh_wallet_token_if_expired(self, wallet: WalletRecord) -> None:
-        ttl_seconds = 10
         now = self._now_epoch()
-        if now - int(wallet.token_issued_at) >= ttl_seconds:
-            wallet.auth_token = self._build_wallet_token(12)
-            wallet.token_issued_at = now
+        if self._token_is_expired(wallet, now=now):
+            self._rotate_wallet_token(wallet, now=now)
+
+    def refresh_wallet_token(self, user_id: str, wallet_id: str, current_token: str = "") -> str | dict:
+        if user_id not in self.users:
+            return f"Error: el usuario {user_id} no existe."
+        if wallet_id not in self.wallets:
+            return f"Error: wallet {wallet_id} no existe."
+
+        wallet = self.wallets[wallet_id]
+        if wallet.user_id != user_id:
+            return "Error: el usuario no es propietario de la wallet."
+
+        now = self._now_epoch()
+        provided_token = current_token.strip()
+        previous_matches = bool(provided_token and provided_token == wallet.auth_token)
+        previous_expired = self._token_is_expired(wallet, now=now)
+
+        self._rotate_wallet_token(wallet, now=now)
+
+        return {
+            "message": f"Token renovado para wallet {wallet_id}.",
+            "wallet_id": wallet_id,
+            "user_id": user_id,
+            **self._token_payload(wallet),
+            "previous_token_matches": previous_matches,
+            "previous_token_expired": previous_expired,
+        }
 
     @staticmethod
     def _build_transfer_id() -> str:
@@ -164,20 +224,8 @@ class MultiUserWalletLedger:
             created_at=self._timestamp(),
         )
         self.user_wallets[user_id] = []
-        self.user_policies[user_id] = UserPolicyRecord(
-            user_id=user_id,
-            can_transfer=True,
-            daily_limit=None,
-            updated_at=self._timestamp(),
-        )
-        self.user_risk_profiles[user_id] = UserRiskProfileRecord(
-            user_id=user_id,
-            profile_name="STANDARD",
-            daily_limit=None,
-            transfer_alert_threshold=None,
-            daily_alert_threshold=None,
-            updated_at=self._timestamp(),
-        )
+        self.user_policies[user_id] = self._new_user_policy(user_id)
+        self.user_risk_profiles[user_id] = self._new_user_risk_profile(user_id)
         return f"Usuario {user_id} creado."
 
     def set_user_policy(
@@ -215,11 +263,12 @@ class MultiUserWalletLedger:
     def get_user_policy(self, user_id: str) -> dict:
         policy = self.user_policies.get(user_id)
         if policy is None:
+            default = self._new_user_policy(user_id)
             return {
                 "user_id": user_id,
-                "can_transfer": True,
+                "can_transfer": default.can_transfer,
                 "daily_limit": None,
-                "updated_at": "",
+                "updated_at": default.updated_at,
             }
         return {
             "user_id": policy.user_id,
@@ -300,13 +349,14 @@ class MultiUserWalletLedger:
     def get_user_risk_profile(self, user_id: str) -> dict:
         profile = self.user_risk_profiles.get(user_id)
         if profile is None:
+            default = self._new_user_risk_profile(user_id)
             return {
                 "user_id": user_id,
-                "profile_name": "STANDARD",
+                "profile_name": default.profile_name,
                 "daily_limit": None,
                 "transfer_alert_threshold": None,
                 "daily_alert_threshold": None,
-                "updated_at": "",
+                "updated_at": default.updated_at,
             }
         return {
             "user_id": profile.user_id,
@@ -534,9 +584,7 @@ class MultiUserWalletLedger:
             "user_id": user_id,
             "model": wallet_model,
             "currency": currency,
-            "auth_token": wallet.auth_token,
-            "token_issued_at": wallet.token_issued_at,
-            "token_expires_at": wallet.token_issued_at + 10,
+            **self._token_payload(wallet),
         }
 
     def mint(self, wallet_id: str, amount: Decimal | int | float | str, reference: str = "MINT") -> str:
@@ -611,10 +659,9 @@ class MultiUserWalletLedger:
             return "Error: sender_token es requerido para transferir."
 
         now = self._now_epoch()
-        if now - int(sender.token_issued_at) >= 10:
-            sender.auth_token = self._build_wallet_token(12)
-            sender.token_issued_at = now
-            return "Error: token expirado para wallet emisor. Solicita un nuevo token."
+        if self._token_is_expired(sender, now=now):
+            self._rotate_wallet_token(sender, now=now)
+            return "Error: token expirado para wallet emisor. Solicita refresh-token."
 
         if sender_token.strip() != sender.auth_token:
             return "Error: token inválido para wallet emisor."
@@ -626,28 +673,13 @@ class MultiUserWalletLedger:
                 f"Esperado={next_nonce}, Recibido={expected_nonce}."
             )
 
-        sender_policy = self.user_policies.get(
-            sender.user_id,
-            UserPolicyRecord(
-                user_id=sender.user_id,
-                can_transfer=True,
-                daily_limit=None,
-                updated_at=self._timestamp(),
-            ),
-        )
+        sender_policy = self.user_policies.get(sender.user_id, self._new_user_policy(sender.user_id))
         if not sender_policy.can_transfer:
             return "Error: política de usuario impide transferencias para este emisor."
 
         sender_risk_profile = self.user_risk_profiles.get(
             sender.user_id,
-            UserRiskProfileRecord(
-                user_id=sender.user_id,
-                profile_name="STANDARD",
-                daily_limit=None,
-                transfer_alert_threshold=None,
-                daily_alert_threshold=None,
-                updated_at=self._timestamp(),
-            ),
+            self._new_user_risk_profile(sender.user_id),
         )
 
         day_prefix = self._timestamp()[:10]
@@ -838,9 +870,7 @@ class MultiUserWalletLedger:
                 "currency": wallet.currency,
                 "balance": str(wallet.balance),
                 "utxo_count": len(self.utxos.get(wallet.wallet_id, [])),
-                "auth_token": wallet.auth_token,
-                "token_issued_at": wallet.token_issued_at,
-                "token_expires_at": wallet.token_issued_at + 10,
+                **self._token_payload(wallet),
                 "created_at": wallet.created_at,
             }
             for wallet in records
