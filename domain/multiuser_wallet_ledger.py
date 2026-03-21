@@ -37,13 +37,53 @@ class UserPolicyRecord:
     updated_at: str
 
 
+@dataclass
+class UserRiskProfileRecord:
+    user_id: str
+    profile_name: str
+    daily_limit: Decimal | None
+    transfer_alert_threshold: Decimal | None
+    daily_alert_threshold: Decimal | None
+    updated_at: str
+
+
 class MultiUserWalletLedger:
     def __init__(self):
         self.users: dict[str, UserRecord] = {}
         self.wallets: dict[str, WalletRecord] = {}
         self.user_wallets: dict[str, list[str]] = {}
         self.user_policies: dict[str, UserPolicyRecord] = {}
+        self.user_risk_profiles: dict[str, UserRiskProfileRecord] = {}
         self.transfers: list[dict] = []
+        self.alerts: list[dict] = []
+
+    RISK_PROFILE_DEFAULTS: dict[str, dict[str, str | None]] = {
+        "STANDARD": {
+            "daily_limit": None,
+            "transfer_alert_threshold": None,
+            "daily_alert_threshold": None,
+        },
+        "LOW": {
+            "daily_limit": "25000",
+            "transfer_alert_threshold": "10000",
+            "daily_alert_threshold": "20000",
+        },
+        "MEDIUM": {
+            "daily_limit": "10000",
+            "transfer_alert_threshold": "5000",
+            "daily_alert_threshold": "8000",
+        },
+        "HIGH": {
+            "daily_limit": "5000",
+            "transfer_alert_threshold": "2000",
+            "daily_alert_threshold": "4000",
+        },
+        "RESTRICTED": {
+            "daily_limit": "1000",
+            "transfer_alert_threshold": "300",
+            "daily_alert_threshold": "800",
+        },
+    }
 
     @staticmethod
     def _timestamp() -> str:
@@ -56,6 +96,21 @@ class MultiUserWalletLedger:
     @staticmethod
     def _build_transfer_id() -> str:
         return f"tx-{secrets.token_hex(8)}"
+
+    @staticmethod
+    def _build_alert_id() -> str:
+        return f"alt-{secrets.token_hex(8)}"
+
+    @classmethod
+    def _risk_defaults_for(cls, profile_name: str) -> dict[str, str | None]:
+        return cls.RISK_PROFILE_DEFAULTS.get(profile_name.upper(), cls.RISK_PROFILE_DEFAULTS["STANDARD"])
+
+    @staticmethod
+    def _min_limit(*limits: Decimal | None) -> Decimal | None:
+        values = [value for value in limits if value is not None]
+        if not values:
+            return None
+        return min(values)
 
     def create_user(self, user_id: str, display_name: str) -> str:
         if not user_id or not display_name:
@@ -73,6 +128,14 @@ class MultiUserWalletLedger:
             user_id=user_id,
             can_transfer=True,
             daily_limit=None,
+            updated_at=self._timestamp(),
+        )
+        self.user_risk_profiles[user_id] = UserRiskProfileRecord(
+            user_id=user_id,
+            profile_name="STANDARD",
+            daily_limit=None,
+            transfer_alert_threshold=None,
+            daily_alert_threshold=None,
             updated_at=self._timestamp(),
         )
         return f"Usuario {user_id} creado."
@@ -127,6 +190,134 @@ class MultiUserWalletLedger:
 
     def list_user_policies(self) -> list[dict]:
         return [self.get_user_policy(user_id) for user_id in self.users.keys()]
+
+    def set_user_risk_profile(
+        self,
+        user_id: str,
+        profile_name: str | None = None,
+        daily_limit: Decimal | int | float | str | None = None,
+        transfer_alert_threshold: Decimal | int | float | str | None = None,
+        daily_alert_threshold: Decimal | int | float | str | None = None,
+    ) -> str:
+        if user_id not in self.users:
+            return f"Error: el usuario {user_id} no existe."
+
+        current = self.user_risk_profiles.get(
+            user_id,
+            UserRiskProfileRecord(
+                user_id=user_id,
+                profile_name="STANDARD",
+                daily_limit=None,
+                transfer_alert_threshold=None,
+                daily_alert_threshold=None,
+                updated_at=self._timestamp(),
+            ),
+        )
+
+        resolved_profile_name = current.profile_name
+        if profile_name is not None and str(profile_name).strip():
+            resolved_profile_name = str(profile_name).strip().upper()
+
+        defaults = self._risk_defaults_for(resolved_profile_name)
+        if profile_name is not None and str(profile_name).strip():
+            current.profile_name = resolved_profile_name
+            current.daily_limit = (
+                normalize_amount(defaults["daily_limit"]) if defaults["daily_limit"] is not None else None
+            )
+            current.transfer_alert_threshold = (
+                normalize_amount(defaults["transfer_alert_threshold"])
+                if defaults["transfer_alert_threshold"] is not None
+                else None
+            )
+            current.daily_alert_threshold = (
+                normalize_amount(defaults["daily_alert_threshold"])
+                if defaults["daily_alert_threshold"] is not None
+                else None
+            )
+
+        if daily_limit is not None:
+            limit_value = normalize_amount(daily_limit)
+            if limit_value <= 0:
+                return "Error: daily_limit debe ser mayor a cero cuando se define."
+            current.daily_limit = limit_value
+
+        if transfer_alert_threshold is not None:
+            single_threshold = normalize_amount(transfer_alert_threshold)
+            if single_threshold <= 0:
+                return "Error: transfer_alert_threshold debe ser mayor a cero cuando se define."
+            current.transfer_alert_threshold = single_threshold
+
+        if daily_alert_threshold is not None:
+            daily_threshold = normalize_amount(daily_alert_threshold)
+            if daily_threshold <= 0:
+                return "Error: daily_alert_threshold debe ser mayor a cero cuando se define."
+            current.daily_alert_threshold = daily_threshold
+
+        current.updated_at = self._timestamp()
+        self.user_risk_profiles[user_id] = current
+        return f"Perfil de riesgo de usuario {user_id} actualizado."
+
+    def get_user_risk_profile(self, user_id: str) -> dict:
+        profile = self.user_risk_profiles.get(user_id)
+        if profile is None:
+            return {
+                "user_id": user_id,
+                "profile_name": "STANDARD",
+                "daily_limit": None,
+                "transfer_alert_threshold": None,
+                "daily_alert_threshold": None,
+                "updated_at": "",
+            }
+        return {
+            "user_id": profile.user_id,
+            "profile_name": profile.profile_name,
+            "daily_limit": str(profile.daily_limit) if profile.daily_limit is not None else None,
+            "transfer_alert_threshold": (
+                str(profile.transfer_alert_threshold) if profile.transfer_alert_threshold is not None else None
+            ),
+            "daily_alert_threshold": str(profile.daily_alert_threshold) if profile.daily_alert_threshold is not None else None,
+            "updated_at": profile.updated_at,
+        }
+
+    def list_user_risk_profiles(self) -> list[dict]:
+        return [self.get_user_risk_profile(user_id) for user_id in self.users.keys()]
+
+    def list_alerts(self, limit: int = 50, user_id: str = "", severity: str = "") -> list[dict]:
+        selected = self.alerts
+        if user_id:
+            selected = [alert for alert in selected if alert.get("user_id") == user_id]
+        if severity:
+            normalized = severity.strip().upper()
+            selected = [alert for alert in selected if str(alert.get("severity", "")).upper() == normalized]
+
+        if limit > 0:
+            selected = selected[-limit:]
+        return list(reversed(selected))
+
+    def _register_alert(
+        self,
+        user_id: str,
+        profile_name: str,
+        alert_type: str,
+        threshold: Decimal,
+        observed: Decimal,
+        transfer_id: str,
+    ) -> None:
+        ratio = observed / threshold if threshold > 0 else Decimal("0")
+        severity = "HIGH" if ratio >= Decimal("1.5") else "MEDIUM"
+        self.alerts.append(
+            {
+                "alert_id": self._build_alert_id(),
+                "user_id": user_id,
+                "profile_name": profile_name,
+                "type": alert_type,
+                "severity": severity,
+                "threshold": str(threshold),
+                "observed": str(observed),
+                "transfer_id": transfer_id,
+                "created_at": self._timestamp(),
+            }
+        )
 
     def _daily_transfer_total(self, user_id: str, day_prefix: str) -> Decimal:
         wallet_ids = set(self.user_wallets.get(user_id, []))
@@ -222,15 +413,28 @@ class MultiUserWalletLedger:
         if not sender_policy.can_transfer:
             return "Error: política de usuario impide transferencias para este emisor."
 
-        if sender_policy.daily_limit is not None:
-            day_prefix = self._timestamp()[:10]
-            day_total = self._daily_transfer_total(sender.user_id, day_prefix)
-            projected_total = day_total + transfer_amount
-            if projected_total > sender_policy.daily_limit:
-                return (
-                    "Error: límite diario excedido. "
-                    f"Actual={day_total}, Intento={transfer_amount}, Límite={sender_policy.daily_limit}."
-                )
+        sender_risk_profile = self.user_risk_profiles.get(
+            sender.user_id,
+            UserRiskProfileRecord(
+                user_id=sender.user_id,
+                profile_name="STANDARD",
+                daily_limit=None,
+                transfer_alert_threshold=None,
+                daily_alert_threshold=None,
+                updated_at=self._timestamp(),
+            ),
+        )
+
+        day_prefix = self._timestamp()[:10]
+        day_total = self._daily_transfer_total(sender.user_id, day_prefix)
+        projected_total = day_total + transfer_amount
+
+        effective_daily_limit = self._min_limit(sender_policy.daily_limit, sender_risk_profile.daily_limit)
+        if effective_daily_limit is not None and projected_total > effective_daily_limit:
+            return (
+                "Error: límite diario excedido. "
+                f"Actual={day_total}, Intento={transfer_amount}, Límite={effective_daily_limit}."
+            )
 
         total_cost = transfer_amount + tx_fee
         if sender.balance < total_cost:
@@ -242,9 +446,10 @@ class MultiUserWalletLedger:
         sender.balance -= total_cost
         receiver.balance += transfer_amount
 
+        transfer_id = self._build_transfer_id()
         self.transfers.append(
             {
-                "transfer_id": self._build_transfer_id(),
+            "transfer_id": transfer_id,
                 "type": "TRANSFER",
                 "sender_wallet": sender_wallet,
                 "receiver_wallet": receiver_wallet,
@@ -255,6 +460,33 @@ class MultiUserWalletLedger:
                 "created_at": self._timestamp(),
             }
         )
+
+        if (
+            sender_risk_profile.transfer_alert_threshold is not None
+            and transfer_amount >= sender_risk_profile.transfer_alert_threshold
+        ):
+            self._register_alert(
+                user_id=sender.user_id,
+                profile_name=sender_risk_profile.profile_name,
+                alert_type="TRANSFER_THRESHOLD",
+                threshold=sender_risk_profile.transfer_alert_threshold,
+                observed=transfer_amount,
+                transfer_id=transfer_id,
+            )
+
+        if (
+            sender_risk_profile.daily_alert_threshold is not None
+            and projected_total >= sender_risk_profile.daily_alert_threshold
+        ):
+            self._register_alert(
+                user_id=sender.user_id,
+                profile_name=sender_risk_profile.profile_name,
+                alert_type="DAILY_THRESHOLD",
+                threshold=sender_risk_profile.daily_alert_threshold,
+                observed=projected_total,
+                transfer_id=transfer_id,
+            )
+
         return f"Transferencia {transfer_amount} de {sender_wallet} a {receiver_wallet} aplicada."
 
     def get_wallet_balance(self, wallet_id: str) -> Decimal:
@@ -296,7 +528,9 @@ class MultiUserWalletLedger:
             "users": self.list_users(),
             "wallets": self.list_wallets(),
             "policies": self.list_user_policies(),
+            "risk_profiles": self.list_user_risk_profiles(),
             "transfers": list(self.transfers),
+            "alerts": list(self.alerts),
         }
 
     @classmethod
@@ -356,6 +590,43 @@ class MultiUserWalletLedger:
                     updated_at=cls._timestamp(),
                 )
 
+        for profile in snapshot.get("risk_profiles", []):
+            user_id = str(profile.get("user_id", "")).strip()
+            if not user_id or user_id not in ledger.users:
+                continue
+            raw_daily_limit = profile.get("daily_limit", None)
+            daily_limit = None
+            if raw_daily_limit not in (None, "", "null"):
+                daily_limit = normalize_amount(raw_daily_limit)
+            raw_transfer_threshold = profile.get("transfer_alert_threshold", None)
+            transfer_alert_threshold = None
+            if raw_transfer_threshold not in (None, "", "null"):
+                transfer_alert_threshold = normalize_amount(raw_transfer_threshold)
+            raw_daily_threshold = profile.get("daily_alert_threshold", None)
+            daily_alert_threshold = None
+            if raw_daily_threshold not in (None, "", "null"):
+                daily_alert_threshold = normalize_amount(raw_daily_threshold)
+
+            ledger.user_risk_profiles[user_id] = UserRiskProfileRecord(
+                user_id=user_id,
+                profile_name=str(profile.get("profile_name", "STANDARD")).upper(),
+                daily_limit=daily_limit,
+                transfer_alert_threshold=transfer_alert_threshold,
+                daily_alert_threshold=daily_alert_threshold,
+                updated_at=str(profile.get("updated_at", cls._timestamp())),
+            )
+
+        for user_id in ledger.users.keys():
+            if user_id not in ledger.user_risk_profiles:
+                ledger.user_risk_profiles[user_id] = UserRiskProfileRecord(
+                    user_id=user_id,
+                    profile_name="STANDARD",
+                    daily_limit=None,
+                    transfer_alert_threshold=None,
+                    daily_alert_threshold=None,
+                    updated_at=cls._timestamp(),
+                )
+
         ledger.transfers = [
             {
                 "transfer_id": str(item.get("transfer_id", "")),
@@ -369,6 +640,21 @@ class MultiUserWalletLedger:
                 "created_at": str(item.get("created_at", cls._timestamp())),
             }
             for item in snapshot.get("transfers", [])
+        ]
+
+        ledger.alerts = [
+            {
+                "alert_id": str(item.get("alert_id", "")),
+                "user_id": str(item.get("user_id", "")),
+                "profile_name": str(item.get("profile_name", "STANDARD")).upper(),
+                "type": str(item.get("type", "TRANSFER_THRESHOLD")),
+                "severity": str(item.get("severity", "MEDIUM")).upper(),
+                "threshold": str(normalize_amount(item.get("threshold", "0"))),
+                "observed": str(normalize_amount(item.get("observed", "0"))),
+                "transfer_id": str(item.get("transfer_id", "")),
+                "created_at": str(item.get("created_at", cls._timestamp())),
+            }
+            for item in snapshot.get("alerts", [])
         ]
 
         return ledger
