@@ -104,7 +104,7 @@ BANNER = r"""
 LOGO_LINES = [
     "   ╭─────────────────────────────────────────────╮",
     "   │         ₿  BLOCKCHAIN WALLET SYSTEM         │",
-    "   │         ── Multiuser Terminal v2.2 ──        │",
+    "   │         ── Multiuser Terminal v2.3 ──        │",
     "   ╰─────────────────────────────────────────────╯",
 ]
 
