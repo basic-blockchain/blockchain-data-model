@@ -6,6 +6,9 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_DOWN, getcontext
 
+from domain.compliance import DEFAULT_COMPLIANCE_PROFILES, evaluate_compliance, resolve_profile
+from domain.traceability_models import CertificateRecord, LogisticsEvent, TraceabilityLot
+
 getcontext().prec = 28
 SATOSHI = Decimal("0.00000001")
 
@@ -63,43 +66,6 @@ class Block:
     timestamp: str
 
 
-@dataclass
-class TraceabilityLot:
-    lot_id: str
-    product: str
-    origin: str
-    owner: str
-    created_at: str
-    certificate_ids: list[str]
-    event_ids: list[str]
-    compliance_status: str = "PENDING"
-    required_events: list[str] | None = None
-    min_active_certificates: int = 1
-
-
-@dataclass
-class CertificateRecord:
-    certificate_id: str
-    lot_id: str
-    cert_type: str
-    issuer: str
-    document_hash: str
-    issued_at: str
-    valid_until: str
-    revoked: bool = False
-
-
-@dataclass
-class LogisticsEvent:
-    event_id: str
-    lot_id: str
-    event_type: str
-    actor: str
-    location: str
-    timestamp: str
-    metadata: dict
-
-
 class UTXO_Blockchain:
     def __init__(self, confirmations_required=2, max_txs_per_block=10):
         # UTXO set activo: solo salidas no gastadas.
@@ -116,20 +82,7 @@ class UTXO_Blockchain:
         self.lots = {}
         self.certificates = {}
         self.logistics_events = {}
-        self.compliance_profiles = {
-            "DEFAULT": {
-                "required_events": ["COSECHA", "PROCESAMIENTO", "EXPORTACION"],
-                "min_active_certificates": 1,
-            },
-            "CAFE": {
-                "required_events": ["COSECHA", "PROCESAMIENTO", "EXPORTACION"],
-                "min_active_certificates": 1,
-            },
-            "CACAO": {
-                "required_events": ["COSECHA", "FERMENTACION", "EXPORTACION"],
-                "min_active_certificates": 1,
-            },
-        }
+        self.compliance_profiles = dict(DEFAULT_COMPLIANCE_PROFILES)
         self._create_genesis_block()
 
     def _timestamp(self):
@@ -453,11 +406,7 @@ class UTXO_Blockchain:
         ]):
             return "Error: Datos inválidos para registrar lote."
 
-        profile_key = product.strip().upper()
-        profile = self.compliance_profiles.get(
-            profile_key,
-            self.compliance_profiles["DEFAULT"],
-        )
+        profile = resolve_profile(product, custom_profiles=self.compliance_profiles)
 
         self.lots[lot_id] = TraceabilityLot(
             lot_id=lot_id,
@@ -546,32 +495,16 @@ class UTXO_Blockchain:
         if lot is None:
             return {"status": "FAIL", "reason": "Lote no encontrado"}
 
-        events = [self.logistics_events[eid] for eid in lot.event_ids]
-        event_types = {event.event_type for event in events}
-        required_events = set(lot.required_events or self.compliance_profiles["DEFAULT"]["required_events"])
-        has_required_events = required_events.issubset(event_types)
+        report = evaluate_compliance(
+            lot=lot,
+            certificates=self.certificates,
+            logistics_events=self.logistics_events,
+        )
+        lot.compliance_status = report["status"]
 
-        active_certificates = []
-        now = datetime.now(timezone.utc)
-        for cert_id in lot.certificate_ids:
-            cert = self.certificates.get(cert_id)
-            if cert is None or cert.revoked:
-                continue
-            if datetime.fromisoformat(cert.valid_until) >= now:
-                active_certificates.append(cert)
-
-        compliant = has_required_events and len(active_certificates) >= lot.min_active_certificates
-        lot.compliance_status = "PASS" if compliant else "FAIL"
-
-        return {
-            "lot_id": lot_id,
-            "status": lot.compliance_status,
-            "has_required_events": has_required_events,
-            "active_certificates": len(active_certificates),
-            "required_events": sorted(required_events),
-            "min_active_certificates": lot.min_active_certificates,
-            "owner": lot.owner,
-        }
+        report["lot_id"] = lot_id
+        report["owner"] = lot.owner
+        return report
 
     def ledger_snapshot(self):
         return [asdict(tx) for tx in self.transaction_history]
