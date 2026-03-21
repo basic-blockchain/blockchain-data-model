@@ -14,4 +14,4 @@ jobs:
       language: python
       python-version: "3.12"
       run-lint-command: python -m py_compile account-model.py utxo-model.py
-      run-tests-command: pytest -q
+      run-tests-command: PYTHONPATH=. pytest -q
