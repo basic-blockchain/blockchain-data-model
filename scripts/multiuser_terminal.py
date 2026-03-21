@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 import sys
 import time
@@ -146,25 +147,38 @@ def _parse_optional_int(raw_value: str, field_name: str) -> tuple[int | None, st
         return None, f"Error: {field_name} debe ser entero"
 
 
+def _validate_numeric(raw_value: str, field_name: str) -> str | None:
+    value = raw_value.strip()
+    if not value:
+        return f"Error: {field_name} es requerido y solo acepta numeros"
+    try:
+        Decimal(value)
+    except (InvalidOperation, ValueError):
+        return f"Error: {field_name} solo acepta numeros"
+    return None
+
+
 def _resolve_sender_token(session: SessionState, provided_token: str) -> str:
-    token = provided_token.strip()
-    if token:
-        return token
-    if session.last_token != "-":
-        return session.last_token
-    return ""
+    _ = session
+    return provided_token.strip()
 
 
 def _sender_token_prompt(session: SessionState) -> str:
-    if session.last_token != "-":
-        return "sender_token (enter=usar token de sesion): "
-    return "sender_token: "
+    _ = session
+    return "sender_token (requerido): "
 
 
 def _is_domain_error_result(result) -> bool:
     if not isinstance(result, str):
         return False
     return result.startswith("Error:") or result.startswith("Wallet invalida")
+
+
+def _compact_feedback_message(result) -> str:
+    text = _short_json(result, max_len=180)
+    if text.lower().startswith("error:"):
+        return text[6:].strip()
+    return text
 
 
 def _run_transfer_wizard(ledger, session: SessionState):
@@ -177,15 +191,21 @@ def _run_transfer_wizard(ledger, session: SessionState):
     sender_token = _resolve_sender_token(session, sender_token_input)
     expected_nonce_raw = _ask("expected_nonce (optional): ")
     expected_nonce, nonce_error = _parse_optional_int(expected_nonce_raw, "expected_nonce")
+    amount_error = _validate_numeric(amount, "amount")
+    fee_error = _validate_numeric(fee, "fee")
     if nonce_error:
-        return nonce_error, True
+        return nonce_error, True, _measure_units(from_wallet, to_wallet, amount, fee, sender_token, expected_nonce_raw)
+    if amount_error:
+        return amount_error, True, _measure_units(from_wallet, to_wallet, amount, fee, sender_token, expected_nonce)
+    if fee_error:
+        return fee_error, True, _measure_units(from_wallet, to_wallet, amount, fee, sender_token, expected_nonce)
 
     print("\nConfirm transfer")
     print(f"- from_wallet: {from_wallet}")
     print(f"- to_wallet: {to_wallet}")
     print(f"- amount: {amount}")
     print(f"- fee: {fee}")
-    print(f"- sender_token_source: {'provided' if sender_token_input.strip() else 'session-last-token'}")
+    print(f"- sender_token_source: {'provided' if sender_token_input.strip() else 'empty'}")
     print(f"- expected_nonce: {expected_nonce if expected_nonce is not None else '-'}")
     confirm = (_ask("confirm (y/N): ") or "n").lower()
     input_units = _measure_units(
@@ -201,7 +221,7 @@ def _run_transfer_wizard(ledger, session: SessionState):
         return "Cancelled by user", True, input_units
 
     if not sender_token:
-        return "Error: sender_token es requerido y no hay token de sesion", True, input_units
+        return "Error: sender_token es requerido.", True, input_units
 
     result = ledger.transfer(
         from_wallet,
@@ -234,7 +254,7 @@ def _apply_result_to_session(
         session.last_token = token
     session.pending_feedback_kind = "ERROR" if is_error else "SUCCESS"
     session.pending_feedback_action = action
-    session.pending_feedback_message = _short_json(result, max_len=180)
+    session.pending_feedback_message = _compact_feedback_message(result)
     output_units = _measure_units(result)
     _register_command_metric(session, action, is_error, elapsed_ms, input_units, output_units)
 
@@ -383,7 +403,7 @@ def main() -> None:
             print("Wallet creada correctamente.")
             if isinstance(result, dict) and result.get("auth_token"):
                 print(f"TOKEN para transfer/refresh-token: {result['auth_token']}")
-                print("Tip: en transfer, presiona Enter en sender_token para reutilizar el token de sesion.")
+                print("Tip: en transfer, ingresa este token en sender_token (es obligatorio).")
             print(json.dumps(result, indent=2, ensure_ascii=False))
             print(f"revision_id={rev}")
             _apply_result_to_session(
@@ -400,6 +420,18 @@ def main() -> None:
             amount = _ask("amount: ")
             reference = _ask("reference (default MINT): ") or "MINT"
             input_units = _measure_units(wallet_id, amount, reference)
+            amount_error = _validate_numeric(amount, "amount")
+            if amount_error:
+                _apply_result_to_session(
+                    session,
+                    action="mint",
+                    result=amount_error,
+                    revision_id=None,
+                    is_error=True,
+                    elapsed_ms=0.0,
+                    input_units=input_units,
+                )
+                continue
             started_at = time.perf_counter()
             result = ledger.mint(wallet_id, amount, reference=reference)
             elapsed_ms = (time.perf_counter() - started_at) * 1000.0
@@ -426,12 +458,36 @@ def main() -> None:
             expected_nonce_raw = _ask("expected_nonce (optional): ")
             expected_nonce, nonce_error = _parse_optional_int(expected_nonce_raw, "expected_nonce")
             input_units = _measure_units(from_wallet, to_wallet, amount, fee, sender_token, expected_nonce)
+            amount_error = _validate_numeric(amount, "amount")
+            fee_error = _validate_numeric(fee, "fee")
             if nonce_error:
                 print(nonce_error)
                 _apply_result_to_session(
                     session,
                     action="transfer",
                     result=nonce_error,
+                    revision_id=None,
+                    is_error=True,
+                    elapsed_ms=0.0,
+                    input_units=input_units,
+                )
+                continue
+            if amount_error:
+                _apply_result_to_session(
+                    session,
+                    action="transfer",
+                    result=amount_error,
+                    revision_id=None,
+                    is_error=True,
+                    elapsed_ms=0.0,
+                    input_units=input_units,
+                )
+                continue
+            if fee_error:
+                _apply_result_to_session(
+                    session,
+                    action="transfer",
+                    result=fee_error,
                     revision_id=None,
                     is_error=True,
                     elapsed_ms=0.0,
@@ -449,7 +505,6 @@ def main() -> None:
             )
             elapsed_ms = (time.perf_counter() - started_at) * 1000.0
             if _is_domain_error_result(result):
-                print(result)
                 _apply_result_to_session(
                     session,
                     action="transfer",
@@ -463,7 +518,6 @@ def main() -> None:
             persist_started = time.perf_counter()
             rev = _persist(store, ledger)
             elapsed_ms += (time.perf_counter() - persist_started) * 1000.0
-            print(result)
             print(f"revision_id={rev}")
             _apply_result_to_session(
                 session,
@@ -575,7 +629,6 @@ def main() -> None:
             result, is_error, input_units = _run_transfer_wizard(ledger, session)
             elapsed_ms = (time.perf_counter() - started_at) * 1000.0
             if is_error:
-                print(result)
                 _apply_result_to_session(
                     session,
                     action="transfer-wizard",
@@ -589,7 +642,6 @@ def main() -> None:
             persist_started = time.perf_counter()
             rev = _persist(store, ledger)
             elapsed_ms += (time.perf_counter() - persist_started) * 1000.0
-            print(result)
             print(f"revision_id={rev}")
             _apply_result_to_session(
                 session,

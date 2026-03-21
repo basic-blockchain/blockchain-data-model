@@ -9,6 +9,7 @@ from scripts.multiuser_terminal import (
     _print_pending_feedback,
     _resolve_sender_token,
     _short_json,
+    _validate_numeric,
 )
 
 
@@ -71,11 +72,18 @@ def test_parse_optional_int_rejects_invalid_value():
     assert error == "Error: expected_nonce debe ser entero"
 
 
+def test_validate_numeric_rejects_text_and_accepts_numbers():
+    assert _validate_numeric("12.50", "amount") is None
+    assert _validate_numeric("0", "fee") is None
+    assert _validate_numeric("abc", "amount") == "Error: amount solo acepta numeros"
+    assert _validate_numeric("", "amount") == "Error: amount es requerido y solo acepta numeros"
+
+
 def test_resolve_sender_token_prefers_input_then_session():
     session = SessionState(last_token="TOKEN_LAST")
 
     assert _resolve_sender_token(session, "TOKEN_INPUT") == "TOKEN_INPUT"
-    assert _resolve_sender_token(session, "") == "TOKEN_LAST"
+    assert _resolve_sender_token(session, "") == ""
     assert _resolve_sender_token(SessionState(), "") == ""
 
 
@@ -93,8 +101,8 @@ def test_is_domain_error_result_handles_wallet_invalida_and_error_prefix():
 
 
 def test_sender_token_prompt_mentions_session_when_token_available():
-    assert _sender_token_prompt(SessionState()) == "sender_token: "
-    assert _sender_token_prompt(SessionState(last_token="TOKEN_X")) == "sender_token (enter=usar token de sesion): "
+    assert _sender_token_prompt(SessionState()) == "sender_token (requerido): "
+    assert _sender_token_prompt(SessionState(last_token="TOKEN_X")) == "sender_token (requerido): "
 
 
 def test_apply_result_stores_pending_feedback():
@@ -162,3 +170,30 @@ def test_apply_result_tracks_command_metrics_and_exec_time():
     assert session.command_metrics["transfer"]["count"] == 2
     assert session.command_metrics["transfer"]["ok"] == 1
     assert session.command_metrics["transfer"]["input_units"] == 80
+
+
+def test_transfer_feedback_is_uniform_in_header_and_body():
+    session = SessionState()
+
+    _apply_result_to_session(
+        session,
+        action="transfer",
+        result="Error: sender_token es requerido para transferir.",
+        revision_id=None,
+        is_error=True,
+    )
+    assert session.pending_feedback_kind == "ERROR"
+    assert session.pending_feedback_action == "transfer"
+    assert "sender_token es requerido" in session.pending_feedback_message
+
+
+def test_pending_feedback_message_omits_error_prefix():
+    session = SessionState()
+    _apply_result_to_session(
+        session,
+        action="transfer",
+        result="Error: wallet emisor o receptor inexistente.",
+        revision_id=None,
+        is_error=True,
+    )
+    assert session.pending_feedback_message == "wallet emisor o receptor inexistente."
