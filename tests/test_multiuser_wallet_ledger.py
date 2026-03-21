@@ -298,3 +298,44 @@ def test_verify_transfer_integrity_detects_hash_tampering():
     report = ledger.verify_transfer_integrity()
     assert report["valid"] is False
     assert "Hash de transferencia inválido" in report["reason"]
+
+
+def test_utxo_transfer_flow_updates_balances_and_utxos():
+    ledger = MultiUserWalletLedger()
+    ledger.create_user("u-a", "A")
+    ledger.create_user("u-b", "B")
+    created = ledger.create_wallet("u-a", wallet_id="wallet_user_alpha_01", model="UTXO")
+    ledger.create_wallet("u-b", wallet_id="wallet_user_bravo_02", model="UTXO")
+
+    assert "Mint" in ledger.mint("wallet_user_alpha_01", "10")
+    assert ledger.get_wallet_balance("wallet_user_alpha_01") == Decimal("10.00000000")
+
+    tx = ledger.transfer(
+        "wallet_user_alpha_01",
+        "wallet_user_bravo_02",
+        "3",
+        fee="1",
+        sender_token=created["auth_token"],
+    )
+    assert "Transferencia" in tx
+    assert ledger.get_wallet_balance("wallet_user_alpha_01") == Decimal("6.00000000")
+    assert ledger.get_wallet_balance("wallet_user_bravo_02") == Decimal("3.00000000")
+    assert len(ledger.list_utxos("wallet_user_bravo_02")) == 1
+
+
+def test_transfer_rejects_between_different_models():
+    ledger = MultiUserWalletLedger()
+    ledger.create_user("u-a", "A")
+    ledger.create_user("u-b", "B")
+    created = ledger.create_wallet("u-a", wallet_id="wallet_user_alpha_01", model="ACCOUNT")
+    ledger.create_wallet("u-b", wallet_id="wallet_user_bravo_02", model="UTXO")
+    ledger.mint("wallet_user_alpha_01", "5")
+
+    error = ledger.transfer(
+        "wallet_user_alpha_01",
+        "wallet_user_bravo_02",
+        "1",
+        fee="0",
+        sender_token=created["auth_token"],
+    )
+    assert "distinto modelo" in error
