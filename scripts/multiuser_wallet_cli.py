@@ -48,15 +48,15 @@ def _print_alert(kind: str, title: str, message: str | None = None, *, stream=No
     out = stream if stream is not None else sys.stdout
     header = f"[{kind}] {title}"
     inner_width = 74
-    border = "+" + "-" * (inner_width + 2) + "+"
-    print(_style(border, color), file=out)
+    border = _style("+" + "-" * (inner_width + 2) + "+", color)
+    print(border, file=out)
     for line in _wrap_lines(header, inner_width):
         print(_style(f"| {line:<{inner_width}} |", color), file=out)
     if message:
         body = f"Mensaje: {message}"
         for line in _wrap_lines(body, inner_width):
             print(_style(f"| {line:<{inner_width}} |", color), file=out)
-    print(_style(border, color), file=out)
+    print(border, file=out)
 
 
 def _wants_json_from_argv() -> bool:

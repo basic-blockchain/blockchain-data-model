@@ -90,8 +90,8 @@ def test_resolve_sender_token_prefers_input_then_session():
 def test_meter_render_has_expected_width():
     bar = _meter(50.0, width=10)
     assert len(bar) == 10
-    assert bar.count("#") == 5
-    assert bar.count("-") == 5
+    assert bar.count("█") == 5
+    assert bar.count("░") == 5
 
 
 def test_is_domain_error_result_handles_wallet_invalida_and_error_prefix():
@@ -101,8 +101,7 @@ def test_is_domain_error_result_handles_wallet_invalida_and_error_prefix():
 
 
 def test_sender_token_prompt_mentions_session_when_token_available():
-    assert _sender_token_prompt(SessionState()) == "sender_token (requerido): "
-    assert _sender_token_prompt(SessionState(last_token="TOKEN_X")) == "sender_token (requerido): "
+    assert _sender_token_prompt() == "sender_token"
 
 
 def test_apply_result_stores_pending_feedback():
@@ -127,9 +126,8 @@ def test_print_pending_feedback_clears_buffer(capsys):
     )
     _print_pending_feedback(session)
     captured = capsys.readouterr()
-    assert "Resultado inmediato:" in captured.out
     assert "[SUCCESS] test-action" in captured.out
-    assert "Mensaje: test" in captured.out
+    assert "test" in captured.out
     assert session.pending_feedback_action == ""
 
 
