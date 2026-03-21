@@ -32,6 +32,10 @@ def test_create_users_wallets_and_transfer_flow():
     assert ledger.get_wallet_balance("wallet_user_alpha_01") == Decimal("75.00000000")
     assert ledger.get_wallet_balance("wallet_user_bravo_02") == Decimal("24.50000000")
     assert len(ledger.state_snapshot()["transfers"]) == 2
+    transfer_record = ledger.state_snapshot()["transfers"][1]
+    assert transfer_record["nonce"] == 1
+    assert transfer_record["previous_hash"] == "GENESIS"
+    assert len(transfer_record["tx_hash"]) == 64
 
 
 def test_transfer_rejects_insufficient_balance():
@@ -252,3 +256,45 @@ def test_transfer_rejects_expired_sender_token_and_rotates_it():
     assert "token expirado" in error
     refreshed = ledger.list_wallets(user_id="u-a")[0]["auth_token"]
     assert refreshed != old_token
+
+
+def test_transfer_rejects_invalid_expected_nonce():
+    ledger = MultiUserWalletLedger()
+    ledger.create_user("u-a", "A")
+    ledger.create_user("u-b", "B")
+    created = ledger.create_wallet("u-a", wallet_id="wallet_user_alpha_01")
+    ledger.create_wallet("u-b", wallet_id="wallet_user_bravo_02")
+    ledger.mint("wallet_user_alpha_01", "5")
+
+    error = ledger.transfer(
+        "wallet_user_alpha_01",
+        "wallet_user_bravo_02",
+        "1",
+        fee="0",
+        sender_token=created["auth_token"],
+        expected_nonce=2,
+    )
+    assert "nonce inválido" in error
+
+
+def test_verify_transfer_integrity_detects_hash_tampering():
+    ledger = MultiUserWalletLedger()
+    ledger.create_user("u-a", "A")
+    ledger.create_user("u-b", "B")
+    created = ledger.create_wallet("u-a", wallet_id="wallet_user_alpha_01")
+    ledger.create_wallet("u-b", wallet_id="wallet_user_bravo_02")
+    ledger.mint("wallet_user_alpha_01", "10")
+
+    assert "Transferencia" in ledger.transfer(
+        "wallet_user_alpha_01",
+        "wallet_user_bravo_02",
+        "2",
+        fee="0",
+        sender_token=created["auth_token"],
+    )
+    assert ledger.verify_transfer_integrity()["valid"] is True
+
+    ledger.transfers[-1]["tx_hash"] = "0" * 64
+    report = ledger.verify_transfer_integrity()
+    assert report["valid"] is False
+    assert "Hash de transferencia inválido" in report["reason"]
