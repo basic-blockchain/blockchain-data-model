@@ -13,7 +13,7 @@ DEFAULT_STORE = ROOT / "data" / "multiuser" / "wallet-ledger.json"
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from persistence.multiuser_wallet_store import JsonMultiUserWalletStore
+from persistence.factory import create_wallet_store
 
 
 @dataclass
@@ -38,7 +38,7 @@ class SessionState:
 
 
 def _load(store_file: Path):
-    store = JsonMultiUserWalletStore(store_file)
+    store = create_wallet_store(json_path=store_file)
     ledger = store.load_ledger()
     return store, ledger
 

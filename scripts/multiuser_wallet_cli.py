@@ -12,7 +12,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from domain.multiuser_wallet_ledger import MultiUserWalletLedger
-from persistence.multiuser_wallet_store import JsonMultiUserWalletStore
+from persistence.factory import create_wallet_store
+from persistence.interfaces import WalletLedgerRepository
 
 
 def _supports_ansi() -> bool:
@@ -80,8 +81,8 @@ def _print_json(payload: dict | list) -> None:
     print(json.dumps(payload, indent=2, ensure_ascii=False))
 
 
-def _load_ledger(store_path: Path) -> tuple[JsonMultiUserWalletStore, MultiUserWalletLedger]:
-    store = JsonMultiUserWalletStore(store_path)
+def _load_ledger(store_path: Path) -> tuple[WalletLedgerRepository, MultiUserWalletLedger]:
+    store = create_wallet_store(json_path=store_path)
     ledger = store.load_ledger()
     return store, ledger
 
