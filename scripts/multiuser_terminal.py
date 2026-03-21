@@ -259,6 +259,23 @@ def _apply_result_to_session(
     _register_command_metric(session, action, is_error, elapsed_ms, input_units, output_units)
 
 
+def _wrap_lines(text: str, width: int) -> list[str]:
+    """Break text into lines that fit within the given width."""
+    if len(text) <= width:
+        return [text]
+    lines: list[str] = []
+    while text:
+        if len(text) <= width:
+            lines.append(text)
+            break
+        cut = text.rfind(" ", 0, width)
+        if cut <= 0:
+            cut = width
+        lines.append(text[:cut])
+        text = text[cut:].lstrip()
+    return lines
+
+
 def _print_alert(kind: str, action: str, message: str) -> None:
     if kind == "ERROR":
         color = "1;31"
@@ -268,10 +285,13 @@ def _print_alert(kind: str, action: str, message: str) -> None:
     title = f"{label} {action}"
     body = f"Mensaje: {message}"
 
-    border = "+" + "-" * 76 + "+"
+    inner_width = 74
+    border = "+" + "-" * (inner_width + 2) + "+"
     print(_style(border, color))
-    print(_style(f"| {title:<74} |", color))
-    print(_style(f"| {body:<74} |", color))
+    for line in _wrap_lines(title, inner_width):
+        print(_style(f"| {line:<{inner_width}} |", color))
+    for line in _wrap_lines(body, inner_width):
+        print(_style(f"| {line:<{inner_width}} |", color))
     print(_style(border, color))
 
 

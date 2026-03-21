@@ -26,16 +26,36 @@ def _style(text: str, code: str) -> str:
     return f"\033[{code}m{text}\033[0m"
 
 
+def _wrap_lines(text: str, width: int) -> list[str]:
+    """Break text into lines that fit within the given width."""
+    if len(text) <= width:
+        return [text]
+    lines: list[str] = []
+    while text:
+        if len(text) <= width:
+            lines.append(text)
+            break
+        cut = text.rfind(" ", 0, width)
+        if cut <= 0:
+            cut = width
+        lines.append(text[:cut])
+        text = text[cut:].lstrip()
+    return lines
+
+
 def _print_alert(kind: str, title: str, message: str | None = None, *, stream=None) -> None:
     color = "1;31" if kind == "ERROR" else "1;32"
     out = stream if stream is not None else sys.stdout
     header = f"[{kind}] {title}"
-    border = "+" + "-" * 76 + "+"
+    inner_width = 74
+    border = "+" + "-" * (inner_width + 2) + "+"
     print(_style(border, color), file=out)
-    print(_style(f"| {header:<74} |", color), file=out)
+    for line in _wrap_lines(header, inner_width):
+        print(_style(f"| {line:<{inner_width}} |", color), file=out)
     if message:
         body = f"Mensaje: {message}"
-        print(_style(f"| {body:<74} |", color), file=out)
+        for line in _wrap_lines(body, inner_width):
+            print(_style(f"| {line:<{inner_width}} |", color), file=out)
     print(_style(border, color), file=out)
 
 
