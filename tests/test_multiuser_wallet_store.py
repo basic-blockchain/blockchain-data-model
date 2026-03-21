@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 
 from domain.multiuser_wallet_ledger import MultiUserWalletLedger
 from persistence.multiuser_wallet_store import JsonMultiUserWalletStore
@@ -45,3 +46,72 @@ def test_store_roundtrip(tmp_path):
     revisions = store.list_revisions(limit=5)
     assert len(revisions) == 1
     assert revisions[0]["revision_id"] == revision_id
+
+
+def test_store_load_infers_wallet_nonce_for_legacy_transfers(tmp_path):
+    store_file: Path = tmp_path / "wallet-ledger.json"
+    legacy_doc = {
+        "schema_version": 1,
+        "updated_at": "2026-03-21T00:00:00+00:00",
+        "current_revision_id": "rev-legacy",
+        "snapshot": {
+            "users": [
+                {"user_id": "u-1", "display_name": "User One", "created_at": "2026-03-21T00:00:00+00:00"},
+                {"user_id": "u-2", "display_name": "User Two", "created_at": "2026-03-21T00:00:00+00:00"},
+            ],
+            "wallets": [
+                {
+                    "wallet_id": "wallet_user_alpha_01",
+                    "user_id": "u-1",
+                    "currency": "USDX",
+                    "balance": "8.00000000",
+                    "auth_token": "ABCDEFGHIJKLMNOP",
+                    "token_issued_at": 100,
+                    "created_at": "2026-03-21T00:00:00+00:00",
+                },
+                {
+                    "wallet_id": "wallet_user_bravo_02",
+                    "user_id": "u-2",
+                    "currency": "USDX",
+                    "balance": "2.00000000",
+                    "auth_token": "QRSTUVWXYZ123456",
+                    "token_issued_at": 100,
+                    "created_at": "2026-03-21T00:00:00+00:00",
+                },
+            ],
+            "policies": [],
+            "risk_profiles": [],
+            "transfers": [
+                {
+                    "transfer_id": "tx-legacy-1",
+                    "type": "TRANSFER",
+                    "sender_wallet": "wallet_user_alpha_01",
+                    "receiver_wallet": "wallet_user_bravo_02",
+                    "amount": "1.00000000",
+                    "fee": "0.00000000",
+                    "reference": "legacy-1",
+                    "status": "SETTLED",
+                    "created_at": "2026-03-21T00:00:01+00:00",
+                },
+                {
+                    "transfer_id": "tx-legacy-2",
+                    "type": "TRANSFER",
+                    "sender_wallet": "wallet_user_alpha_01",
+                    "receiver_wallet": "wallet_user_bravo_02",
+                    "amount": "1.00000000",
+                    "fee": "0.00000000",
+                    "reference": "legacy-2",
+                    "status": "SETTLED",
+                    "created_at": "2026-03-21T00:00:02+00:00",
+                },
+            ],
+            "alerts": [],
+        },
+        "revisions": [],
+    }
+    store_file.write_text(json.dumps(legacy_doc), encoding="utf-8")
+
+    store = JsonMultiUserWalletStore(store_file)
+    ledger = store.load_ledger()
+
+    assert ledger.current_wallet_nonce("wallet_user_alpha_01") == 2

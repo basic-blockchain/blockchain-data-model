@@ -433,3 +433,145 @@ def test_cli_transfer_requires_sender_token(tmp_path):
     assert out.returncode == 1
     payload = json.loads(out.stdout)
     assert "sender_token es requerido" in payload["result"]
+
+
+def test_cli_transfer_rejects_invalid_expected_nonce(tmp_path):
+    repo_root = Path(__file__).resolve().parents[1]
+    store_file = tmp_path / "wallet-ledger.json"
+
+    assert _run_cli(
+        ["--store-file", str(store_file), "create-user", "--user-id", "u1", "--display-name", "User One"],
+        cwd=repo_root,
+    ).returncode == 0
+    assert _run_cli(
+        ["--store-file", str(store_file), "create-user", "--user-id", "u2", "--display-name", "User Two"],
+        cwd=repo_root,
+    ).returncode == 0
+
+    wallet = _run_cli(
+        [
+            "--store-file",
+            str(store_file),
+            "create-wallet",
+            "--user-id",
+            "u1",
+            "--wallet-id",
+            "wallet_user_alpha_01",
+            "--json",
+        ],
+        cwd=repo_root,
+    )
+    token_u1 = json.loads(wallet.stdout)["result"]["auth_token"]
+    assert _run_cli(
+        [
+            "--store-file",
+            str(store_file),
+            "create-wallet",
+            "--user-id",
+            "u2",
+            "--wallet-id",
+            "wallet_user_bravo_02",
+            "--json",
+        ],
+        cwd=repo_root,
+    ).returncode == 0
+    assert _run_cli(
+        ["--store-file", str(store_file), "mint", "--wallet-id", "wallet_user_alpha_01", "--amount", "10"],
+        cwd=repo_root,
+    ).returncode == 0
+
+    out = _run_cli(
+        [
+            "--store-file",
+            str(store_file),
+            "transfer",
+            "--from-wallet",
+            "wallet_user_alpha_01",
+            "--to-wallet",
+            "wallet_user_bravo_02",
+            "--amount",
+            "2",
+            "--sender-token",
+            token_u1,
+            "--expected-nonce",
+            "2",
+            "--json",
+        ],
+        cwd=repo_root,
+    )
+    assert out.returncode == 1
+    payload = json.loads(out.stdout)
+    assert "nonce inválido" in payload["result"]
+
+
+def test_cli_verify_integrity_reports_valid_chain(tmp_path):
+    repo_root = Path(__file__).resolve().parents[1]
+    store_file = tmp_path / "wallet-ledger.json"
+
+    assert _run_cli(
+        ["--store-file", str(store_file), "create-user", "--user-id", "u1", "--display-name", "User One"],
+        cwd=repo_root,
+    ).returncode == 0
+    assert _run_cli(
+        ["--store-file", str(store_file), "create-user", "--user-id", "u2", "--display-name", "User Two"],
+        cwd=repo_root,
+    ).returncode == 0
+
+    wallet = _run_cli(
+        [
+            "--store-file",
+            str(store_file),
+            "create-wallet",
+            "--user-id",
+            "u1",
+            "--wallet-id",
+            "wallet_user_alpha_01",
+            "--json",
+        ],
+        cwd=repo_root,
+    )
+    token_u1 = json.loads(wallet.stdout)["result"]["auth_token"]
+    assert _run_cli(
+        [
+            "--store-file",
+            str(store_file),
+            "create-wallet",
+            "--user-id",
+            "u2",
+            "--wallet-id",
+            "wallet_user_bravo_02",
+            "--json",
+        ],
+        cwd=repo_root,
+    ).returncode == 0
+
+    assert _run_cli(
+        ["--store-file", str(store_file), "mint", "--wallet-id", "wallet_user_alpha_01", "--amount", "10"],
+        cwd=repo_root,
+    ).returncode == 0
+    assert _run_cli(
+        [
+            "--store-file",
+            str(store_file),
+            "transfer",
+            "--from-wallet",
+            "wallet_user_alpha_01",
+            "--to-wallet",
+            "wallet_user_bravo_02",
+            "--amount",
+            "2",
+            "--sender-token",
+            token_u1,
+            "--json",
+        ],
+        cwd=repo_root,
+    ).returncode == 0
+
+    out = _run_cli(
+        ["--store-file", str(store_file), "verify-integrity", "--json"],
+        cwd=repo_root,
+    )
+    assert out.returncode == 0
+    payload = json.loads(out.stdout)
+    assert payload["success"] is True
+    assert payload["result"]["valid"] is True
