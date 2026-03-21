@@ -4,6 +4,7 @@ import secrets
 import re
 import string
 import time
+from hashlib import sha256
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_DOWN
@@ -60,6 +61,7 @@ class MultiUserWalletLedger:
         self.user_wallets: dict[str, list[str]] = {}
         self.user_policies: dict[str, UserPolicyRecord] = {}
         self.user_risk_profiles: dict[str, UserRiskProfileRecord] = {}
+        self.wallet_nonces: dict[str, int] = {}
         self.transfers: list[dict] = []
         self.alerts: list[dict] = []
 
@@ -358,6 +360,110 @@ class MultiUserWalletLedger:
             total += normalize_amount(transfer.get("amount", "0"))
         return total
 
+    @staticmethod
+    def _build_transfer_hash(
+        *,
+        transfer_id: str,
+        sender_wallet: str,
+        receiver_wallet: str,
+        amount: Decimal,
+        fee: Decimal,
+        reference: str,
+        nonce: int,
+        created_at: str,
+        previous_hash: str,
+    ) -> str:
+        payload = (
+            f"{transfer_id}|{sender_wallet}|{receiver_wallet}|"
+            f"{amount.normalize()}|{fee.normalize()}|{reference}|"
+            f"{nonce}|{created_at}|{previous_hash}"
+        )
+        return sha256(payload.encode("utf-8")).hexdigest()
+
+    def _last_transfer_hash(self) -> str:
+        for transfer in reversed(self.transfers):
+            if transfer.get("type") != "TRANSFER":
+                continue
+            tx_hash = str(transfer.get("tx_hash", "")).strip()
+            if tx_hash:
+                return tx_hash
+        return "GENESIS"
+
+    def current_wallet_nonce(self, wallet_id: str) -> int:
+        return int(self.wallet_nonces.get(wallet_id, 0))
+
+    def verify_transfer_integrity(self) -> dict:
+        previous_hash = "GENESIS"
+        nonce_tracker: dict[str, int] = {}
+        checked = 0
+
+        for transfer in self.transfers:
+            if transfer.get("type") != "TRANSFER":
+                continue
+
+            sender_wallet = str(transfer.get("sender_wallet", ""))
+            receiver_wallet = str(transfer.get("receiver_wallet", ""))
+            transfer_id = str(transfer.get("transfer_id", ""))
+            reference = str(transfer.get("reference", ""))
+            created_at = str(transfer.get("created_at", ""))
+            nonce = int(str(transfer.get("nonce", "-1")))
+            current_previous_hash = str(transfer.get("previous_hash", ""))
+            current_tx_hash = str(transfer.get("tx_hash", ""))
+            amount = normalize_amount(transfer.get("amount", "0"))
+            fee = normalize_amount(transfer.get("fee", "0"))
+
+            expected_nonce = nonce_tracker.get(sender_wallet, 0) + 1
+            if nonce != expected_nonce:
+                return {
+                    "valid": False,
+                    "checked_transfers": checked,
+                    "reason": (
+                        f"Nonce inválido en {transfer_id}. "
+                        f"Esperado={expected_nonce}, Recibido={nonce}."
+                    ),
+                }
+
+            if current_previous_hash != previous_hash:
+                return {
+                    "valid": False,
+                    "checked_transfers": checked,
+                    "reason": (
+                        f"Hash previo inválido en {transfer_id}. "
+                        f"Esperado={previous_hash}, Recibido={current_previous_hash}."
+                    ),
+                }
+
+            expected_hash = self._build_transfer_hash(
+                transfer_id=transfer_id,
+                sender_wallet=sender_wallet,
+                receiver_wallet=receiver_wallet,
+                amount=amount,
+                fee=fee,
+                reference=reference,
+                nonce=nonce,
+                created_at=created_at,
+                previous_hash=current_previous_hash,
+            )
+            if current_tx_hash != expected_hash:
+                return {
+                    "valid": False,
+                    "checked_transfers": checked,
+                    "reason": (
+                        f"Hash de transferencia inválido en {transfer_id}. "
+                        f"Esperado={expected_hash}, Recibido={current_tx_hash}."
+                    ),
+                }
+
+            nonce_tracker[sender_wallet] = nonce
+            previous_hash = current_tx_hash
+            checked += 1
+
+        return {
+            "valid": True,
+            "checked_transfers": checked,
+            "reason": "Integridad verificada correctamente.",
+        }
+
     def create_wallet(self, user_id: str, wallet_id: str = "", currency: str = "USDX") -> str | dict:
         if user_id not in self.users:
             return f"Error: el usuario {user_id} no existe."
@@ -422,6 +528,7 @@ class MultiUserWalletLedger:
         fee: Decimal | int | float | str = 0,
         reference: str = "",
         sender_token: str = "",
+        expected_nonce: int | None = None,
     ) -> str:
         transfer_amount = normalize_amount(amount)
         tx_fee = normalize_amount(fee)
@@ -452,6 +559,13 @@ class MultiUserWalletLedger:
 
         if sender_token.strip() != sender.auth_token:
             return "Error: token inválido para wallet emisor."
+
+        next_nonce = self.current_wallet_nonce(sender_wallet) + 1
+        if expected_nonce is not None and int(expected_nonce) != next_nonce:
+            return (
+                "Error: nonce inválido para wallet emisor. "
+                f"Esperado={next_nonce}, Recibido={expected_nonce}."
+            )
 
         sender_policy = self.user_policies.get(
             sender.user_id,
@@ -499,19 +613,37 @@ class MultiUserWalletLedger:
         receiver.balance += transfer_amount
 
         transfer_id = self._build_transfer_id()
+        transfer_nonce = next_nonce
+        previous_hash = self._last_transfer_hash()
+        created_at = self._timestamp()
+        tx_hash = self._build_transfer_hash(
+            transfer_id=transfer_id,
+            sender_wallet=sender_wallet,
+            receiver_wallet=receiver_wallet,
+            amount=transfer_amount,
+            fee=tx_fee,
+            reference=reference,
+            nonce=transfer_nonce,
+            created_at=created_at,
+            previous_hash=previous_hash,
+        )
         self.transfers.append(
             {
-            "transfer_id": transfer_id,
+                "transfer_id": transfer_id,
                 "type": "TRANSFER",
                 "sender_wallet": sender_wallet,
                 "receiver_wallet": receiver_wallet,
                 "amount": str(transfer_amount),
                 "fee": str(tx_fee),
+                "nonce": transfer_nonce,
+                "previous_hash": previous_hash,
+                "tx_hash": tx_hash,
                 "reference": reference,
                 "status": "SETTLED",
-                "created_at": self._timestamp(),
+                "created_at": created_at,
             }
         )
+        self.wallet_nonces[sender_wallet] = transfer_nonce
 
         if (
             sender_risk_profile.transfer_alert_threshold is not None
@@ -688,20 +820,45 @@ class MultiUserWalletLedger:
                     updated_at=cls._timestamp(),
                 )
 
-        ledger.transfers = [
-            {
-                "transfer_id": str(item.get("transfer_id", "")),
-                "type": str(item.get("type", "TRANSFER")),
-                "sender_wallet": str(item.get("sender_wallet", "")),
-                "receiver_wallet": str(item.get("receiver_wallet", "")),
-                "amount": str(normalize_amount(item.get("amount", "0"))),
-                "fee": str(normalize_amount(item.get("fee", "0"))),
-                "reference": str(item.get("reference", "")),
-                "status": str(item.get("status", "SETTLED")),
-                "created_at": str(item.get("created_at", cls._timestamp())),
-            }
-            for item in snapshot.get("transfers", [])
-        ]
+        inferred_nonces: dict[str, int] = {}
+        ledger.transfers = []
+        for item in snapshot.get("transfers", []):
+            transfer_type = str(item.get("type", "TRANSFER"))
+            sender_wallet = str(item.get("sender_wallet", ""))
+            raw_nonce = item.get("nonce", None)
+            if transfer_type == "TRANSFER":
+                if raw_nonce in (None, "", "null"):
+                    nonce = inferred_nonces.get(sender_wallet, 0) + 1
+                else:
+                    nonce = int(str(raw_nonce))
+                inferred_nonces[sender_wallet] = max(inferred_nonces.get(sender_wallet, 0), nonce)
+            else:
+                nonce = 0
+
+            ledger.transfers.append(
+                {
+                    "transfer_id": str(item.get("transfer_id", "")),
+                    "type": transfer_type,
+                    "sender_wallet": sender_wallet,
+                    "receiver_wallet": str(item.get("receiver_wallet", "")),
+                    "amount": str(normalize_amount(item.get("amount", "0"))),
+                    "fee": str(normalize_amount(item.get("fee", "0"))),
+                    "nonce": nonce,
+                    "previous_hash": str(item.get("previous_hash", "")),
+                    "tx_hash": str(item.get("tx_hash", "")),
+                    "reference": str(item.get("reference", "")),
+                    "status": str(item.get("status", "SETTLED")),
+                    "created_at": str(item.get("created_at", cls._timestamp())),
+                }
+            )
+
+        for transfer in ledger.transfers:
+            if transfer.get("type") != "TRANSFER":
+                continue
+            sender_wallet = str(transfer.get("sender_wallet", ""))
+            nonce = int(str(transfer.get("nonce", "0")))
+            if sender_wallet:
+                ledger.wallet_nonces[sender_wallet] = max(ledger.wallet_nonces.get(sender_wallet, 0), nonce)
 
         ledger.alerts = [
             {
