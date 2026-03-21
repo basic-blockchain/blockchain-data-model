@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
-"""Simple forward-only SQL migration runner.
+"""Simple forward-only SQL migration runner with auto database creation.
 
 Reads versioned SQL files from migrations/versions/ and applies them
 in order, skipping versions already recorded in schema_migrations.
+Creates the target database automatically if it does not exist.
 
-Usage:
-    DATABASE_URL=postgresql://user:pass@host:5432/db python migrations/migrate.py
+Usage (Windows):
+    set DATABASE_URL=postgresql://postgres:password@localhost:5432/blockchain_data_model
+    py migrations/migrate.py
+
+Usage (Linux/Mac):
+    DATABASE_URL=postgresql://user:pass@host:5432/blockchain_data_model python migrations/migrate.py
 """
 
 from __future__ import annotations
@@ -14,9 +19,11 @@ import os
 import re
 import sys
 from pathlib import Path
+from urllib.parse import urlparse, urlunparse
 
 try:
     import psycopg2
+    from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 except ImportError:
     print("psycopg2 is required: pip install psycopg2-binary", file=sys.stderr)
     sys.exit(1)
@@ -24,6 +31,34 @@ except ImportError:
 
 VERSIONS_DIR = Path(__file__).resolve().parent / "versions"
 FILE_PATTERN = re.compile(r"^V(\d+)__.*\.sql$")
+DEFAULT_DB_NAME = "blockchain_data_model"
+
+
+def _parse_dsn(dsn: str) -> tuple[str, str]:
+    """Extract the database name and build a maintenance DSN pointing to 'postgres'."""
+    parsed = urlparse(dsn)
+    db_name = parsed.path.lstrip("/") or DEFAULT_DB_NAME
+    maintenance_parsed = parsed._replace(path="/postgres")
+    maintenance_dsn = urlunparse(maintenance_parsed)
+    return db_name, maintenance_dsn
+
+
+def _ensure_database(dsn: str) -> None:
+    """Create the target database if it does not exist."""
+    db_name, maintenance_dsn = _parse_dsn(dsn)
+
+    conn = psycopg2.connect(maintenance_dsn)
+    conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (db_name,))
+            if cur.fetchone() is None:
+                cur.execute(f'CREATE DATABASE "{db_name}"')
+                print(f"Database '{db_name}' created.")
+            else:
+                print(f"Database '{db_name}' already exists.")
+    finally:
+        conn.close()
 
 
 def _ensure_migration_table(cur) -> None:
@@ -58,7 +93,10 @@ def migrate(dsn: str | None = None) -> None:
     dsn = dsn or os.environ.get("DATABASE_URL", "")
     if not dsn:
         print("DATABASE_URL environment variable is required.", file=sys.stderr)
+        print("Example: postgresql://postgres:password@localhost:5432/blockchain_data_model", file=sys.stderr)
         sys.exit(1)
+
+    _ensure_database(dsn)
 
     conn = psycopg2.connect(dsn)
     try:
