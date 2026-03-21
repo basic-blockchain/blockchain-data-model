@@ -751,3 +751,67 @@ def test_cli_refresh_token_rejects_non_owner(tmp_path):
     payload = json.loads(denied.stdout)
     assert payload["success"] is False
     assert "no es propietario" in payload["result"]
+
+
+def test_cli_argument_error_is_json_when_json_flag_present(tmp_path):
+    repo_root = Path(__file__).resolve().parents[1]
+    store_file = tmp_path / "wallet-ledger.json"
+
+    out = _run_cli(
+        [
+            "--store-file",
+            str(store_file),
+            "create-user",
+            "--display-name",
+            "Bob",
+            "--json",
+        ],
+        cwd=repo_root,
+    )
+    assert out.returncode == 2
+    payload = json.loads(out.stdout)
+    assert payload["success"] is False
+    assert payload["error_type"] == "ArgumentError"
+
+
+def test_cli_non_json_success_uses_visual_success_alert(tmp_path):
+    repo_root = Path(__file__).resolve().parents[1]
+    store_file = tmp_path / "wallet-ledger.json"
+
+    out = _run_cli(
+        [
+            "--store-file",
+            str(store_file),
+            "create-user",
+            "--user-id",
+            "u1",
+            "--display-name",
+            "User One",
+        ],
+        cwd=repo_root,
+    )
+    assert out.returncode == 0
+    assert "[SUCCESS] create-user" in out.stdout
+
+
+def test_cli_non_json_error_alert_message_omits_error_prefix(tmp_path):
+    repo_root = Path(__file__).resolve().parents[1]
+    store_file = tmp_path / "wallet-ledger.json"
+
+    out = _run_cli(
+        [
+            "--store-file",
+            str(store_file),
+            "mint",
+            "--wallet-id",
+            "wallet_missing",
+            "--amount",
+            "10",
+        ],
+        cwd=repo_root,
+    )
+
+    assert out.returncode == 1
+    assert "[ERROR] mint" in out.stderr
+    assert "Mensaje: wallet wallet_missing no existe." in out.stderr
+    assert "Mensaje: Error:" not in out.stderr
