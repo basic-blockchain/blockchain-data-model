@@ -203,7 +203,13 @@ OPERATOR_MENU = [
 
 VIEWER_MENU = [
     ("WALLETS", [
+        ("2", "create-wallet", "Crear wallet UTXO o ACCOUNT"),
+        ("9", "refresh-token", "Renovar token de wallet"),
         ("13", "balance", "Consultar balance"),
+    ]),
+    ("TRANSACCIONES", [
+        ("4", "transfer", "Transferir fondos"),
+        ("10", "transfer-wizard", "Asistente de transferencia"),
     ]),
     ("CONSULTAS", [
         ("5", "list-wallets", "Listar mis wallets"),

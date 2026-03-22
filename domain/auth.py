@@ -51,6 +51,8 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         Permission.VIEW_REVISIONS,
     },
     Role.VIEWER: {
+        Permission.CREATE_WALLET,
+        Permission.TRANSFER,
         Permission.VIEW_USERS,
         Permission.VIEW_WALLETS,
         Permission.VIEW_TRANSFERS,
