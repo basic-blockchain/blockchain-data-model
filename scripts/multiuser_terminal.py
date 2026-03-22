@@ -785,6 +785,563 @@ def _auth_flow(store_file) -> SessionState:
     raise SystemExit(1)
 
 
+# ── Command Context & helpers ────────────────────────────
+
+@dataclass
+class CommandContext:
+    session: SessionState
+    store: object  # WalletLedgerRepository
+    ledger: object  # MultiUserWalletLedger
+    store_file: Path
+
+
+class _SkipCommand(Exception):
+    """Raised inside a handler to signal ``continue`` in the main loop."""
+
+
+def _execute_and_track(
+    ctx: CommandContext,
+    *,
+    action: str,
+    result,
+    revision_id: str | None,
+    is_error: bool,
+    elapsed_ms: float = 0.0,
+    input_units: int = 0,
+) -> None:
+    _apply_result_to_session(
+        ctx.session,
+        action=action,
+        result=result,
+        revision_id=revision_id,
+        is_error=is_error,
+        elapsed_ms=elapsed_ms,
+        input_units=input_units,
+    )
+
+
+# ── Command handlers ────────────────────────────────────
+
+def _cmd_create_user(ctx: CommandContext) -> None:
+    _section_header("CREAR USUARIO")
+    user_id = _prompt("user_id")
+    display_name = _prompt("display_name")
+    password = _prompt("password", hint="(min 4 caracteres, vacio=sin password)")
+    role = _prompt("role", hint="ADMIN / OPERATOR / VIEWER", default="VIEWER").upper()
+    if role not in ("ADMIN", "OPERATOR", "VIEWER"):
+        _print_result_box("ERROR", "create-user", f"Rol invalido: {role}")
+        raise _SkipCommand
+    invitation_token = ""
+    if role == "ADMIN":
+        invitation_token = _prompt("invitation_token", hint="(requerido para ADMIN)")
+    input_units = _measure_units(user_id, display_name, role)
+    started_at = time.perf_counter()
+    result = ctx.ledger.create_user(user_id, display_name, password=password, role=role, invitation_token=invitation_token)
+    if isinstance(result, str) and result.startswith("Error"):
+        elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+        _print_result_box("ERROR", "create-user", result)
+        _execute_and_track(
+            ctx, action="create-user", result=result,
+            revision_id=None, is_error=True, elapsed_ms=elapsed_ms, input_units=input_units,
+        )
+        raise _SkipCommand
+    rev = _persist(ctx.store, ctx.ledger)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    _print_data_box("Usuario creado", result if isinstance(result, dict) else {"resultado": result}, rev)
+    if isinstance(result, dict) and result.get("activation_code"):
+        print()
+        print(_box_top())
+        print(_box_line(_yellow("  CODIGO DE ACTIVACION")))
+        print(_box_mid())
+        print(_box_line(f"  Codigo: {_bold(result['activation_code'])}"))
+        print(_box_line(_dim("  El usuario necesita este codigo en su primer login.")))
+        print(_box_bot())
+    _execute_and_track(
+        ctx, action="create-user", result=result,
+        revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
+    )
+
+
+def _cmd_create_wallet(ctx: CommandContext) -> None:
+    _section_header("CREAR WALLET")
+    if "ADMIN" in ctx.session.auth_roles:
+        user_id = _prompt("user_id")
+    else:
+        user_id = ctx.session.auth_user_id
+        print(_dim(f"  Usuario: {user_id}"))
+    wallet_id = _prompt("wallet_id", hint="(20-30 chars, enter=auto)")
+    currency = _prompt("currency", default="USDX")
+    model = _prompt("model", hint="ACCOUNT | UTXO", default="ACCOUNT").upper()
+    input_units = _measure_units(user_id, wallet_id, currency, model)
+    started_at = time.perf_counter()
+    result = ctx.ledger.create_wallet(user_id, wallet_id=wallet_id, currency=currency, model=model)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    if _is_domain_error_result(result):
+        _print_result_box("ERROR", "create-wallet", str(result))
+        _execute_and_track(
+            ctx, action="create-wallet", result=result,
+            revision_id=None, is_error=True, elapsed_ms=elapsed_ms, input_units=input_units,
+        )
+        raise _SkipCommand
+    persist_started = time.perf_counter()
+    rev = _persist(ctx.store, ctx.ledger)
+    elapsed_ms += (time.perf_counter() - persist_started) * 1000.0
+    _print_data_box("Wallet creada", result if isinstance(result, dict) else {"resultado": result}, rev)
+    if isinstance(result, dict) and result.get("auth_token"):
+        _print_token_notice(result["auth_token"])
+    _execute_and_track(
+        ctx, action="create-wallet", result=result,
+        revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
+    )
+
+
+def _cmd_mint(ctx: CommandContext) -> None:
+    _section_header("MINT TOKENS")
+    wallet_id = _prompt("wallet_id")
+    amount = _prompt("amount")
+    reference = _prompt("reference", default="MINT")
+    input_units = _measure_units(wallet_id, amount, reference)
+    amount_error = _validate_numeric(amount, "amount")
+    if amount_error:
+        _execute_and_track(
+            ctx, action="mint", result=amount_error,
+            revision_id=None, is_error=True, elapsed_ms=0.0, input_units=input_units,
+        )
+        raise _SkipCommand
+    started_at = time.perf_counter()
+    result = ctx.ledger.mint(wallet_id, amount, reference=reference)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    persist_started = time.perf_counter()
+    rev = _persist(ctx.store, ctx.ledger)
+    elapsed_ms += (time.perf_counter() - persist_started) * 1000.0
+    _print_data_box("Mint ejecutado", result if isinstance(result, dict) else {"resultado": result}, rev)
+    _execute_and_track(
+        ctx, action="mint", result=result,
+        revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
+    )
+
+
+def _cmd_transfer(ctx: CommandContext) -> None:
+    _section_header("TRANSFERENCIA")
+    from_wallet = _prompt("from_wallet")
+    to_wallet = _prompt("to_wallet")
+    amount = _prompt("amount")
+    fee = _prompt("fee", default="0")
+    sender_token = _resolve_sender_token(ctx.session, _prompt(_sender_token_prompt(), hint="(requerido)"))
+    expected_nonce_raw = _prompt("expected_nonce", hint="(opcional)")
+    expected_nonce, nonce_error = _parse_optional_int(expected_nonce_raw, "expected_nonce")
+    input_units = _measure_units(from_wallet, to_wallet, amount, fee, sender_token, expected_nonce)
+    amount_error = _validate_numeric(amount, "amount")
+    fee_error = _validate_numeric(fee, "fee")
+    for err in (nonce_error, amount_error, fee_error):
+        if err:
+            _execute_and_track(
+                ctx, action="transfer", result=err,
+                revision_id=None, is_error=True, elapsed_ms=0.0, input_units=input_units,
+            )
+            break
+    else:
+        started_at = time.perf_counter()
+        result = ctx.ledger.transfer(
+            from_wallet, to_wallet, amount,
+            fee=fee, sender_token=sender_token, expected_nonce=expected_nonce,
+        )
+        elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+        if _is_domain_error_result(result):
+            _execute_and_track(
+                ctx, action="transfer", result=result,
+                revision_id=None, is_error=True, elapsed_ms=elapsed_ms, input_units=input_units,
+            )
+            return
+        persist_started = time.perf_counter()
+        rev = _persist(ctx.store, ctx.ledger)
+        elapsed_ms += (time.perf_counter() - persist_started) * 1000.0
+        _print_data_box("Transferencia ejecutada", result if isinstance(result, dict) else {"resultado": result}, rev)
+        _execute_and_track(
+            ctx, action="transfer", result=result,
+            revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
+        )
+
+
+def _cmd_list_wallets(ctx: CommandContext) -> None:
+    _section_header("LISTAR WALLETS")
+    is_admin = "ADMIN" in ctx.session.auth_roles
+    if is_admin:
+        user_id = _prompt("user_id", hint="(opcional, filtrar por usuario)")
+    else:
+        user_id = ctx.session.auth_user_id
+    input_units = _measure_units(user_id)
+    started_at = time.perf_counter()
+    result = ctx.ledger.list_wallets(user_id=user_id)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    if not result and not is_admin:
+        _print_result_box("ERROR", "list-wallets", "No tienes wallets creadas. Usa la opcion [2] para crear una.")
+    else:
+        _print_data_box(f"Wallets ({len(result)} encontradas)", result)
+    _execute_and_track(
+        ctx, action="list-wallets", result=result,
+        revision_id=None, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
+    )
+
+
+def _cmd_list_utxos(ctx: CommandContext) -> None:
+    _section_header("LISTAR UTXOS")
+    is_admin = "ADMIN" in ctx.session.auth_roles
+    if is_admin:
+        wallet_id = _prompt("wallet_id", hint="(opcional)")
+    else:
+        my_wallets = ctx.ledger.list_wallets(user_id=ctx.session.auth_user_id)
+        if not my_wallets:
+            _print_result_box("ERROR", "list-utxos", "No tienes wallets creadas.")
+            raise _SkipCommand
+        if len(my_wallets) == 1:
+            wallet_id = my_wallets[0]["wallet_id"]
+        else:
+            print()
+            print(_box_top())
+            print(_box_line(_cyan("  Tus wallets:")))
+            print(_box_mid())
+            for i, w in enumerate(my_wallets, 1):
+                print(_box_line(f"  {_yellow(f'[{i}]')} {w['wallet_id']}  {_dim(w['model'])}"))
+            print(_box_bot())
+            sel = _prompt("Selecciona", hint=f"1-{len(my_wallets)}")
+            try:
+                wallet_id = my_wallets[int(sel) - 1]["wallet_id"]
+            except (ValueError, IndexError):
+                _print_result_box("ERROR", "list-utxos", "Seleccion invalida.")
+                raise _SkipCommand
+    input_units = _measure_units(wallet_id)
+    started_at = time.perf_counter()
+    result = ctx.ledger.list_utxos(wallet_id=wallet_id)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    _print_data_box(f"UTXOs ({len(result)} encontrados)", result)
+    _execute_and_track(
+        ctx, action="list-utxos", result=result,
+        revision_id=None, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
+    )
+
+
+def _cmd_verify_integrity(ctx: CommandContext) -> None:
+    _section_header("VERIFICAR INTEGRIDAD")
+    input_units = _measure_units("verify-integrity")
+    started_at = time.perf_counter()
+    result = ctx.ledger.verify_transfer_integrity()
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    _print_data_box("Resultado de integridad", result)
+    _execute_and_track(
+        ctx, action="verify-integrity", result=result,
+        revision_id=None, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
+    )
+
+
+def _cmd_snapshot(ctx: CommandContext) -> None:
+    _section_header("SNAPSHOT DEL LEDGER")
+    input_units = _measure_units("snapshot")
+    started_at = time.perf_counter()
+    result = ctx.ledger.state_snapshot()
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    summary = {
+        "users": len(result.get("users", [])),
+        "wallets": len(result.get("wallets", [])),
+        "policies": len(result.get("policies", [])),
+        "risk_profiles": len(result.get("risk_profiles", [])),
+        "transfers": len(result.get("transfers", [])),
+        "alerts": len(result.get("alerts", [])),
+        "utxos": len(result.get("utxos", [])),
+    }
+    _print_data_box("Estado del Ledger", summary)
+    _execute_and_track(
+        ctx, action="snapshot", result=result,
+        revision_id=None, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
+    )
+
+
+def _cmd_refresh_token(ctx: CommandContext) -> None:
+    _section_header("REFRESH TOKEN")
+    user_id = _prompt("user_id")
+    wallet_id = _prompt("wallet_id")
+    current_token = _prompt("current_token", hint="(opcional)")
+    input_units = _measure_units(user_id, wallet_id, current_token)
+    started_at = time.perf_counter()
+    result = ctx.ledger.refresh_wallet_token(user_id, wallet_id, current_token=current_token)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    if _is_domain_error_result(result):
+        _print_result_box("ERROR", "refresh-token", str(result))
+        _execute_and_track(
+            ctx, action="refresh-token", result=result,
+            revision_id=None, is_error=True, elapsed_ms=elapsed_ms, input_units=input_units,
+        )
+        raise _SkipCommand
+    persist_started = time.perf_counter()
+    rev = _persist(ctx.store, ctx.ledger)
+    elapsed_ms += (time.perf_counter() - persist_started) * 1000.0
+    _print_data_box("Token renovado", result if isinstance(result, dict) else {"resultado": result}, rev)
+    if isinstance(result, dict) and result.get("new_token"):
+        _print_token_notice(result["new_token"])
+    _execute_and_track(
+        ctx, action="refresh-token", result=result,
+        revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
+    )
+
+
+def _cmd_transfer_wizard(ctx: CommandContext) -> None:
+    started_at = time.perf_counter()
+    result, is_error, input_units = _run_transfer_wizard(ctx.ledger, ctx.session)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    if is_error:
+        _execute_and_track(
+            ctx, action="transfer-wizard", result=result,
+            revision_id=None, is_error=True, elapsed_ms=elapsed_ms, input_units=input_units,
+        )
+        raise _SkipCommand
+    persist_started = time.perf_counter()
+    rev = _persist(ctx.store, ctx.ledger)
+    elapsed_ms += (time.perf_counter() - persist_started) * 1000.0
+    _print_data_box("Transferencia ejecutada", result if isinstance(result, dict) else {"resultado": result}, rev)
+    _execute_and_track(
+        ctx, action="transfer-wizard", result=result,
+        revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
+    )
+
+
+def _cmd_dashboard(ctx: CommandContext) -> None:
+    _print_dashboard(ctx.session)
+
+
+def _cmd_list_users(ctx: CommandContext) -> None:
+    _section_header("LISTAR USUARIOS")
+    input_units = _measure_units("list-users")
+    started_at = time.perf_counter()
+    result = ctx.ledger.list_users()
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    _print_data_box(f"Usuarios ({len(result)} registrados)", result)
+    _execute_and_track(
+        ctx, action="list-users", result=result,
+        revision_id=None, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
+    )
+
+
+def _cmd_balance(ctx: CommandContext) -> None:
+    _section_header("CONSULTAR BALANCE")
+    wallet_id = _prompt("wallet_id", hint="(vacio = mostrar todas tus wallets)")
+    if not wallet_id:
+        user_wallets = ctx.ledger.list_wallets(user_id=ctx.session.auth_user_id)
+        if not user_wallets:
+            _print_result_box("ERROR", "balance", "No tienes wallets creadas.")
+            raise _SkipCommand
+        if len(user_wallets) == 1:
+            wallet_id = user_wallets[0]["wallet_id"]
+        else:
+            print()
+            print(_box_top())
+            print(_box_line(_cyan("  Tus wallets:")))
+            print(_box_mid())
+            for i, w in enumerate(user_wallets, 1):
+                print(_box_line(f"  {_yellow(f'[{i}]')} {w['wallet_id']}  {_dim(w['model'])}  {_bold(w['balance'])} {w['currency']}"))
+            print(_box_bot())
+            sel = _prompt("Selecciona", hint=f"1-{len(user_wallets)}")
+            try:
+                idx = int(sel) - 1
+                wallet_id = user_wallets[idx]["wallet_id"]
+            except (ValueError, IndexError):
+                _print_result_box("ERROR", "balance", "Seleccion invalida.")
+                raise _SkipCommand
+    if wallet_id and "ADMIN" not in ctx.session.auth_roles:
+        my_wallet_ids = [w["wallet_id"] for w in ctx.ledger.list_wallets(user_id=ctx.session.auth_user_id)]
+        if wallet_id not in my_wallet_ids:
+            _print_result_box("ERROR", "balance", "No tienes acceso a esa wallet.")
+            raise _SkipCommand
+    input_units = _measure_units(wallet_id)
+    started_at = time.perf_counter()
+    balance = ctx.ledger.get_wallet_balance(wallet_id)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    result = {"wallet_id": wallet_id, "balance": str(balance)}
+    _print_data_box("Balance", result)
+    _execute_and_track(
+        ctx, action="balance", result=result,
+        revision_id=None, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
+    )
+
+
+def _cmd_set_policy(ctx: CommandContext) -> None:
+    _section_header("CONFIGURAR POLITICA")
+    user_id = _prompt("user_id")
+    can_transfer = _prompt("can_transfer", hint="true/false", default="true").lower() in ("true", "1", "yes")
+    daily_limit = _prompt("daily_limit", hint="(opcional, vacio=sin limite)")
+    input_units = _measure_units(user_id, can_transfer, daily_limit)
+    started_at = time.perf_counter()
+    dl = Decimal(daily_limit) if daily_limit else None
+    result = ctx.ledger.set_user_policy(user_id, can_transfer=can_transfer, daily_limit=dl)
+    rev = _persist(ctx.store, ctx.ledger)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    _print_data_box("Politica configurada", result if isinstance(result, dict) else {"resultado": result}, rev)
+    _execute_and_track(
+        ctx, action="set-policy", result=result,
+        revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
+    )
+
+
+def _cmd_get_policy(ctx: CommandContext) -> None:
+    _section_header("VER POLITICA")
+    user_id = _prompt("user_id")
+    input_units = _measure_units(user_id)
+    started_at = time.perf_counter()
+    result = ctx.ledger.get_user_policy(user_id)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    _print_data_box("Politica de usuario", result)
+    _execute_and_track(
+        ctx, action="get-policy", result=result,
+        revision_id=None, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
+    )
+
+
+def _cmd_list_policies(ctx: CommandContext) -> None:
+    _section_header("LISTAR POLITICAS")
+    input_units = _measure_units("list-policies")
+    started_at = time.perf_counter()
+    result = ctx.ledger.list_user_policies()
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    _print_data_box(f"Politicas ({len(result)} registradas)", result)
+    _execute_and_track(
+        ctx, action="list-policies", result=result,
+        revision_id=None, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
+    )
+
+
+def _cmd_set_risk_profile(ctx: CommandContext) -> None:
+    _section_header("ASIGNAR PERFIL DE RIESGO")
+    user_id = _prompt("user_id")
+    profile_name = _prompt("profile_name", hint="STANDARD/LOW/MEDIUM/HIGH/RESTRICTED", default="STANDARD").upper()
+    daily_limit = _prompt("daily_limit", hint="(opcional)")
+    transfer_threshold = _prompt("transfer_alert_threshold", hint="(opcional)")
+    daily_threshold = _prompt("daily_alert_threshold", hint="(opcional)")
+    input_units = _measure_units(user_id, profile_name, daily_limit, transfer_threshold, daily_threshold)
+    started_at = time.perf_counter()
+    dl = Decimal(daily_limit) if daily_limit else None
+    tt = Decimal(transfer_threshold) if transfer_threshold else None
+    dt = Decimal(daily_threshold) if daily_threshold else None
+    result = ctx.ledger.set_user_risk_profile(user_id, profile_name=profile_name, daily_limit=dl, transfer_alert_threshold=tt, daily_alert_threshold=dt)
+    rev = _persist(ctx.store, ctx.ledger)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    _print_data_box("Perfil de riesgo asignado", result if isinstance(result, dict) else {"resultado": result}, rev)
+    _execute_and_track(
+        ctx, action="set-risk-profile", result=result,
+        revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
+    )
+
+
+def _cmd_get_risk_profile(ctx: CommandContext) -> None:
+    _section_header("VER PERFIL DE RIESGO")
+    user_id = _prompt("user_id")
+    input_units = _measure_units(user_id)
+    started_at = time.perf_counter()
+    result = ctx.ledger.get_user_risk_profile(user_id)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    _print_data_box("Perfil de riesgo", result)
+    _execute_and_track(
+        ctx, action="get-risk-profile", result=result,
+        revision_id=None, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
+    )
+
+
+def _cmd_list_risk_profiles(ctx: CommandContext) -> None:
+    _section_header("LISTAR PERFILES DE RIESGO")
+    input_units = _measure_units("list-risk-profiles")
+    started_at = time.perf_counter()
+    result = ctx.ledger.list_user_risk_profiles()
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    _print_data_box(f"Perfiles de riesgo ({len(result)})", result)
+    _execute_and_track(
+        ctx, action="list-risk-profiles", result=result,
+        revision_id=None, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
+    )
+
+
+def _cmd_list_alerts(ctx: CommandContext) -> None:
+    _section_header("LISTAR ALERTAS")
+    user_id = _prompt("user_id", hint="(opcional)")
+    severity = _prompt("severity", hint="LOW/MEDIUM/HIGH (opcional)")
+    input_units = _measure_units(user_id, severity)
+    started_at = time.perf_counter()
+    result = ctx.ledger.list_alerts(user_id=user_id, severity=severity)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    _print_data_box(f"Alertas ({len(result)} encontradas)", result)
+    _execute_and_track(
+        ctx, action="list-alerts", result=result,
+        revision_id=None, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
+    )
+
+
+def _cmd_list_revisions(ctx: CommandContext) -> None:
+    _section_header("HISTORIAL DE REVISIONES")
+    limit_raw = _prompt("limit", default="10")
+    limit = int(limit_raw) if limit_raw.isdigit() else 10
+    input_units = _measure_units(limit)
+    started_at = time.perf_counter()
+    result = ctx.store.list_revisions(limit=limit)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    _print_data_box(f"Revisiones ({len(result)} recientes)", result)
+    _execute_and_track(
+        ctx, action="list-revisions", result=result,
+        revision_id=None, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
+    )
+
+
+def _cmd_generate_admin_token(ctx: CommandContext) -> None:
+    _section_header("GENERAR TOKEN DE INVITACION ADMIN")
+    input_units = _measure_units("generate-admin-token")
+    started_at = time.perf_counter()
+    result = ctx.ledger.generate_admin_invitation(ctx.session.auth_user_id)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    if isinstance(result, str) and result.startswith("Error"):
+        _print_result_box("ERROR", "generate-admin-token", result)
+        _execute_and_track(ctx, action="generate-admin-token", result=result, revision_id=None, is_error=True, elapsed_ms=elapsed_ms, input_units=input_units)
+        raise _SkipCommand
+    rev = _persist(ctx.store, ctx.ledger)
+    _print_data_box("Token de invitacion generado", result, rev)
+    print()
+    print(_box_top())
+    print(_box_line(_yellow("  ⚡ IMPORTANTE: Comparte este token con el nuevo ADMIN")))
+    print(_box_mid())
+    print(_box_line(f"  Token: {_bold(result['token'])}"))
+    print(_box_line(_dim("  Este token es de un solo uso.")))
+    print(_box_bot())
+    _execute_and_track(ctx, action="generate-admin-token", result=result, revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units)
+
+
+# ── Command handler registry ────────────────────────────
+
+from typing import Callable
+from domain.auth import Permission
+
+COMMAND_HANDLERS: dict[str, tuple[Callable, str | None]] = {
+    "1":  (_cmd_create_user,          Permission.CREATE_USER),
+    "2":  (_cmd_create_wallet,        Permission.CREATE_WALLET),
+    "3":  (_cmd_mint,                 Permission.MINT),
+    "4":  (_cmd_transfer,             Permission.TRANSFER),
+    "5":  (_cmd_list_wallets,         Permission.VIEW_WALLETS),
+    "6":  (_cmd_list_utxos,           Permission.VIEW_WALLETS),
+    "7":  (_cmd_verify_integrity,     Permission.VIEW_WALLETS),
+    "8":  (_cmd_snapshot,             Permission.VIEW_WALLETS),
+    "9":  (_cmd_refresh_token,        Permission.VIEW_WALLETS),
+    "10": (_cmd_transfer_wizard,      Permission.TRANSFER),
+    "11": (_cmd_dashboard,            None),
+    "12": (_cmd_list_users,           Permission.VIEW_USERS),
+    "13": (_cmd_balance,              Permission.VIEW_WALLETS),
+    "14": (_cmd_set_policy,           Permission.SET_POLICY),
+    "15": (_cmd_get_policy,           Permission.VIEW_POLICIES),
+    "16": (_cmd_list_policies,        Permission.VIEW_POLICIES),
+    "17": (_cmd_set_risk_profile,     Permission.SET_RISK_PROFILE),
+    "18": (_cmd_get_risk_profile,     Permission.VIEW_RISK_PROFILES),
+    "19": (_cmd_list_risk_profiles,   Permission.VIEW_RISK_PROFILES),
+    "20": (_cmd_list_alerts,          Permission.VIEW_ALERTS),
+    "21": (_cmd_list_revisions,       Permission.VIEW_REVISIONS),
+    "22": (_cmd_generate_admin_token, None),
+}
+
+
+# ── Main loop ────────────────────────────────────────────
+
 def main() -> None:
     store_file = DEFAULT_STORE
 
@@ -793,18 +1350,7 @@ def main() -> None:
 
     session = _auth_flow(store_file)
 
-    from domain.auth import Permission, has_permission
-
-    OPTION_PERMISSIONS = {
-        "1": Permission.CREATE_USER, "2": Permission.CREATE_WALLET,
-        "3": Permission.MINT, "4": Permission.TRANSFER, "10": Permission.TRANSFER,
-        "9": Permission.VIEW_WALLETS, "12": Permission.VIEW_USERS, "13": Permission.VIEW_WALLETS,
-        "5": Permission.VIEW_WALLETS, "6": Permission.VIEW_WALLETS,
-        "7": Permission.VIEW_WALLETS, "8": Permission.VIEW_WALLETS, "21": Permission.VIEW_REVISIONS,
-        "14": Permission.SET_POLICY, "15": Permission.VIEW_POLICIES, "16": Permission.VIEW_POLICIES,
-        "17": Permission.SET_RISK_PROFILE, "18": Permission.VIEW_RISK_PROFILES,
-        "19": Permission.VIEW_RISK_PROFILES, "20": Permission.VIEW_ALERTS,
-    }
+    from domain.auth import has_permission
 
     user_menu = _get_menu_for_roles(session.auth_roles)
 
@@ -823,7 +1369,16 @@ def main() -> None:
             print()
             break
 
-        required_perm = OPTION_PERMISSIONS.get(option)
+        handler_entry = COMMAND_HANDLERS.get(option)
+        if not handler_entry:
+            _print_result_box("ERROR", "invalid-option", f"Opcion '{option}' no reconocida.")
+            _apply_result_to_session(
+                session, action="invalid-option", result=f"Invalid option: {option}",
+                revision_id=None, is_error=True, elapsed_ms=0.0, input_units=_measure_units(option),
+            )
+            continue
+
+        handler, required_perm = handler_entry
         if required_perm and not has_permission(session.auth_roles, required_perm):
             _print_result_box("ERROR", "permiso-denegado", f"Se requiere: {required_perm}. Tus roles: {', '.join(session.auth_roles) or 'ninguno'}")
             continue
@@ -839,503 +1394,11 @@ def main() -> None:
             )
             break
 
-        if option == "1":
-            _section_header("CREAR USUARIO")
-            user_id = _prompt("user_id")
-            display_name = _prompt("display_name")
-            password = _prompt("password", hint="(min 4 caracteres, vacio=sin password)")
-            role = _prompt("role", hint="ADMIN / OPERATOR / VIEWER", default="VIEWER").upper()
-            if role not in ("ADMIN", "OPERATOR", "VIEWER"):
-                _print_result_box("ERROR", "create-user", f"Rol invalido: {role}")
-                continue
-            invitation_token = ""
-            if role == "ADMIN":
-                invitation_token = _prompt("invitation_token", hint="(requerido para ADMIN)")
-            input_units = _measure_units(user_id, display_name, role)
-            started_at = time.perf_counter()
-            result = ledger.create_user(user_id, display_name, password=password, role=role, invitation_token=invitation_token)
-            if isinstance(result, str) and result.startswith("Error"):
-                elapsed_ms = (time.perf_counter() - started_at) * 1000.0
-                _print_result_box("ERROR", "create-user", result)
-                _apply_result_to_session(
-                    session, action="create-user", result=result,
-                    revision_id=None, is_error=True, elapsed_ms=elapsed_ms, input_units=input_units,
-                )
-                continue
-            rev = _persist(store, ledger)
-            elapsed_ms = (time.perf_counter() - started_at) * 1000.0
-            _print_data_box("Usuario creado", result if isinstance(result, dict) else {"resultado": result}, rev)
-            if isinstance(result, dict) and result.get("activation_code"):
-                print()
-                print(_box_top())
-                print(_box_line(_yellow("  CODIGO DE ACTIVACION")))
-                print(_box_mid())
-                print(_box_line(f"  Codigo: {_bold(result['activation_code'])}"))
-                print(_box_line(_dim("  El usuario necesita este codigo en su primer login.")))
-                print(_box_bot())
-            _apply_result_to_session(
-                session, action="create-user", result=result,
-                revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
-            )
-
-        elif option == "2":
-            _section_header("CREAR WALLET")
-            if "ADMIN" in session.auth_roles:
-                user_id = _prompt("user_id")
-            else:
-                user_id = session.auth_user_id
-                print(_dim(f"  Usuario: {user_id}"))
-            wallet_id = _prompt("wallet_id", hint="(20-30 chars, enter=auto)")
-            currency = _prompt("currency", default="USDX")
-            model = _prompt("model", hint="ACCOUNT | UTXO", default="ACCOUNT").upper()
-            input_units = _measure_units(user_id, wallet_id, currency, model)
-            started_at = time.perf_counter()
-            result = ledger.create_wallet(user_id, wallet_id=wallet_id, currency=currency, model=model)
-            elapsed_ms = (time.perf_counter() - started_at) * 1000.0
-            if _is_domain_error_result(result):
-                _print_result_box("ERROR", "create-wallet", str(result))
-                _apply_result_to_session(
-                    session, action="create-wallet", result=result,
-                    revision_id=None, is_error=True, elapsed_ms=elapsed_ms, input_units=input_units,
-                )
-                continue
-            persist_started = time.perf_counter()
-            rev = _persist(store, ledger)
-            elapsed_ms += (time.perf_counter() - persist_started) * 1000.0
-            _print_data_box("Wallet creada", result if isinstance(result, dict) else {"resultado": result}, rev)
-            if isinstance(result, dict) and result.get("auth_token"):
-                _print_token_notice(result["auth_token"])
-            _apply_result_to_session(
-                session, action="create-wallet", result=result,
-                revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
-            )
-
-        elif option == "3":
-            _section_header("MINT TOKENS")
-            wallet_id = _prompt("wallet_id")
-            amount = _prompt("amount")
-            reference = _prompt("reference", default="MINT")
-            input_units = _measure_units(wallet_id, amount, reference)
-            amount_error = _validate_numeric(amount, "amount")
-            if amount_error:
-                _apply_result_to_session(
-                    session, action="mint", result=amount_error,
-                    revision_id=None, is_error=True, elapsed_ms=0.0, input_units=input_units,
-                )
-                continue
-            started_at = time.perf_counter()
-            result = ledger.mint(wallet_id, amount, reference=reference)
-            elapsed_ms = (time.perf_counter() - started_at) * 1000.0
-            persist_started = time.perf_counter()
-            rev = _persist(store, ledger)
-            elapsed_ms += (time.perf_counter() - persist_started) * 1000.0
-            _print_data_box("Mint ejecutado", result if isinstance(result, dict) else {"resultado": result}, rev)
-            _apply_result_to_session(
-                session, action="mint", result=result,
-                revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
-            )
-
-        elif option == "4":
-            _section_header("TRANSFERENCIA")
-            if "ADMIN" not in session.auth_roles:
-                my_wallets = ledger.list_wallets(user_id=session.auth_user_id)
-                my_wallet_ids = [w["wallet_id"] for w in my_wallets]
-                if not my_wallets:
-                    _print_result_box("ERROR", "transfer", "No tienes wallets creadas.")
-                    continue
-                if len(my_wallets) == 1:
-                    from_wallet = my_wallets[0]["wallet_id"]
-                    print(_dim(f"  Wallet origen: {from_wallet}"))
-                else:
-                    print()
-                    print(_box_top())
-                    print(_box_line(_cyan("  Tus wallets:")))
-                    print(_box_mid())
-                    for i, w in enumerate(my_wallets, 1):
-                        print(_box_line(f"  {_yellow(f'[{i}]')} {w['wallet_id']}  {_bold(w['balance'])} {w['currency']}"))
-                    print(_box_bot())
-                    sel = _prompt("Selecciona wallet origen", hint=f"1-{len(my_wallets)}")
-                    try:
-                        from_wallet = my_wallets[int(sel) - 1]["wallet_id"]
-                    except (ValueError, IndexError):
-                        _print_result_box("ERROR", "transfer", "Seleccion invalida.")
-                        continue
-            else:
-                from_wallet = _prompt("from_wallet")
-            to_wallet = _prompt("to_wallet")
-            amount = _prompt("amount")
-            fee = _prompt("fee", default="0")
-            sender_token = _resolve_sender_token(session, _prompt(_sender_token_prompt(), hint="(requerido)"))
-            expected_nonce_raw = _prompt("expected_nonce", hint="(opcional)")
-            expected_nonce, nonce_error = _parse_optional_int(expected_nonce_raw, "expected_nonce")
-            input_units = _measure_units(from_wallet, to_wallet, amount, fee, sender_token, expected_nonce)
-            amount_error = _validate_numeric(amount, "amount")
-            fee_error = _validate_numeric(fee, "fee")
-            for err in (nonce_error, amount_error, fee_error):
-                if err:
-                    _apply_result_to_session(
-                        session, action="transfer", result=err,
-                        revision_id=None, is_error=True, elapsed_ms=0.0, input_units=input_units,
-                    )
-                    break
-            else:
-                started_at = time.perf_counter()
-                result = ledger.transfer(
-                    from_wallet, to_wallet, amount,
-                    fee=fee, sender_token=sender_token, expected_nonce=expected_nonce,
-                )
-                elapsed_ms = (time.perf_counter() - started_at) * 1000.0
-                if _is_domain_error_result(result):
-                    _apply_result_to_session(
-                        session, action="transfer", result=result,
-                        revision_id=None, is_error=True, elapsed_ms=elapsed_ms, input_units=input_units,
-                    )
-                    continue
-                persist_started = time.perf_counter()
-                rev = _persist(store, ledger)
-                elapsed_ms += (time.perf_counter() - persist_started) * 1000.0
-                _print_data_box("Transferencia ejecutada", result if isinstance(result, dict) else {"resultado": result}, rev)
-                _apply_result_to_session(
-                    session, action="transfer", result=result,
-                    revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
-                )
-                continue
+        ctx = CommandContext(session=session, store=store, ledger=ledger, store_file=store_file)
+        try:
+            handler(ctx)
+        except _SkipCommand:
             continue
-
-        elif option == "5":
-            _section_header("LISTAR WALLETS")
-            is_admin = "ADMIN" in session.auth_roles
-            if is_admin:
-                user_id = _prompt("user_id", hint="(opcional, filtrar por usuario)")
-            else:
-                user_id = session.auth_user_id
-            input_units = _measure_units(user_id)
-            started_at = time.perf_counter()
-            result = ledger.list_wallets(user_id=user_id)
-            elapsed_ms = (time.perf_counter() - started_at) * 1000.0
-            if not result and not is_admin:
-                _print_result_box("ERROR", "list-wallets", "No tienes wallets creadas. Usa la opcion [2] para crear una.")
-            else:
-                _print_data_box(f"Wallets ({len(result)} encontradas)", result)
-            _apply_result_to_session(
-                session, action="list-wallets", result=result,
-                revision_id=None, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
-            )
-
-        elif option == "6":
-            _section_header("LISTAR UTXOS")
-            is_admin = "ADMIN" in session.auth_roles
-            if is_admin:
-                wallet_id = _prompt("wallet_id", hint="(opcional)")
-            else:
-                my_wallets = ledger.list_wallets(user_id=session.auth_user_id)
-                if not my_wallets:
-                    _print_result_box("ERROR", "list-utxos", "No tienes wallets creadas.")
-                    continue
-                if len(my_wallets) == 1:
-                    wallet_id = my_wallets[0]["wallet_id"]
-                else:
-                    print()
-                    print(_box_top())
-                    print(_box_line(_cyan("  Tus wallets:")))
-                    print(_box_mid())
-                    for i, w in enumerate(my_wallets, 1):
-                        print(_box_line(f"  {_yellow(f'[{i}]')} {w['wallet_id']}  {_dim(w['model'])}"))
-                    print(_box_bot())
-                    sel = _prompt("Selecciona", hint=f"1-{len(my_wallets)}")
-                    try:
-                        wallet_id = my_wallets[int(sel) - 1]["wallet_id"]
-                    except (ValueError, IndexError):
-                        _print_result_box("ERROR", "list-utxos", "Seleccion invalida.")
-                        continue
-            input_units = _measure_units(wallet_id)
-            started_at = time.perf_counter()
-            result = ledger.list_utxos(wallet_id=wallet_id)
-            elapsed_ms = (time.perf_counter() - started_at) * 1000.0
-            _print_data_box(f"UTXOs ({len(result)} encontrados)", result)
-            _apply_result_to_session(
-                session, action="list-utxos", result=result,
-                revision_id=None, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
-            )
-
-        elif option == "7":
-            _section_header("VERIFICAR INTEGRIDAD")
-            input_units = _measure_units("verify-integrity")
-            started_at = time.perf_counter()
-            result = ledger.verify_transfer_integrity()
-            elapsed_ms = (time.perf_counter() - started_at) * 1000.0
-            _print_data_box("Resultado de integridad", result)
-            _apply_result_to_session(
-                session, action="verify-integrity", result=result,
-                revision_id=None, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
-            )
-
-        elif option == "8":
-            _section_header("SNAPSHOT DEL LEDGER")
-            input_units = _measure_units("snapshot")
-            started_at = time.perf_counter()
-            result = ledger.state_snapshot()
-            elapsed_ms = (time.perf_counter() - started_at) * 1000.0
-            summary = {
-                "users": len(result.get("users", [])),
-                "wallets": len(result.get("wallets", [])),
-                "policies": len(result.get("policies", [])),
-                "risk_profiles": len(result.get("risk_profiles", [])),
-                "transfers": len(result.get("transfers", [])),
-                "alerts": len(result.get("alerts", [])),
-                "utxos": len(result.get("utxos", [])),
-            }
-            _print_data_box("Estado del Ledger", summary)
-            _apply_result_to_session(
-                session, action="snapshot", result=result,
-                revision_id=None, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
-            )
-
-        elif option == "9":
-            _section_header("REFRESH TOKEN")
-            user_id = _prompt("user_id")
-            wallet_id = _prompt("wallet_id")
-            current_token = _prompt("current_token", hint="(opcional)")
-            input_units = _measure_units(user_id, wallet_id, current_token)
-            started_at = time.perf_counter()
-            result = ledger.refresh_wallet_token(user_id, wallet_id, current_token=current_token)
-            elapsed_ms = (time.perf_counter() - started_at) * 1000.0
-            if _is_domain_error_result(result):
-                _print_result_box("ERROR", "refresh-token", str(result))
-                _apply_result_to_session(
-                    session, action="refresh-token", result=result,
-                    revision_id=None, is_error=True, elapsed_ms=elapsed_ms, input_units=input_units,
-                )
-                continue
-            persist_started = time.perf_counter()
-            rev = _persist(store, ledger)
-            elapsed_ms += (time.perf_counter() - persist_started) * 1000.0
-            _print_data_box("Token renovado", result if isinstance(result, dict) else {"resultado": result}, rev)
-            if isinstance(result, dict) and result.get("new_token"):
-                _print_token_notice(result["new_token"])
-            _apply_result_to_session(
-                session, action="refresh-token", result=result,
-                revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
-            )
-
-        elif option == "10":
-            started_at = time.perf_counter()
-            result, is_error, input_units = _run_transfer_wizard(ledger, session)
-            elapsed_ms = (time.perf_counter() - started_at) * 1000.0
-            if is_error:
-                _apply_result_to_session(
-                    session, action="transfer-wizard", result=result,
-                    revision_id=None, is_error=True, elapsed_ms=elapsed_ms, input_units=input_units,
-                )
-                continue
-            persist_started = time.perf_counter()
-            rev = _persist(store, ledger)
-            elapsed_ms += (time.perf_counter() - persist_started) * 1000.0
-            _print_data_box("Transferencia ejecutada", result if isinstance(result, dict) else {"resultado": result}, rev)
-            _apply_result_to_session(
-                session, action="transfer-wizard", result=result,
-                revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
-            )
-
-        elif option == "11":
-            _print_dashboard(session)
-
-        elif option == "22":
-            _section_header("GENERAR TOKEN DE INVITACION ADMIN")
-            input_units = _measure_units("generate-admin-token")
-            started_at = time.perf_counter()
-            result = ledger.generate_admin_invitation(session.auth_user_id)
-            elapsed_ms = (time.perf_counter() - started_at) * 1000.0
-            if isinstance(result, str) and result.startswith("Error"):
-                _print_result_box("ERROR", "generate-admin-token", result)
-                _apply_result_to_session(session, action="generate-admin-token", result=result, revision_id=None, is_error=True, elapsed_ms=elapsed_ms, input_units=input_units)
-                continue
-            rev = _persist(store, ledger)
-            _print_data_box("Token de invitacion generado", result, rev)
-            print()
-            print(_box_top())
-            print(_box_line(_yellow("  ⚡ IMPORTANTE: Comparte este token con el nuevo ADMIN")))
-            print(_box_mid())
-            print(_box_line(f"  Token: {_bold(result['token'])}"))
-            print(_box_line(_dim("  Este token es de un solo uso.")))
-            print(_box_bot())
-            _apply_result_to_session(session, action="generate-admin-token", result=result, revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units)
-
-        elif option == "12":
-            _section_header("LISTAR USUARIOS")
-            input_units = _measure_units("list-users")
-            started_at = time.perf_counter()
-            result = ledger.list_users()
-            elapsed_ms = (time.perf_counter() - started_at) * 1000.0
-            _print_data_box(f"Usuarios ({len(result)} registrados)", result)
-            _apply_result_to_session(
-                session, action="list-users", result=result,
-                revision_id=None, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
-            )
-
-        elif option == "13":
-            _section_header("CONSULTAR BALANCE")
-            wallet_id = _prompt("wallet_id", hint="(vacio = mostrar todas tus wallets)")
-            if not wallet_id:
-                user_wallets = ledger.list_wallets(user_id=session.auth_user_id)
-                if not user_wallets:
-                    _print_result_box("ERROR", "balance", "No tienes wallets creadas.")
-                    continue
-                if len(user_wallets) == 1:
-                    wallet_id = user_wallets[0]["wallet_id"]
-                else:
-                    print()
-                    print(_box_top())
-                    print(_box_line(_cyan("  Tus wallets:")))
-                    print(_box_mid())
-                    for i, w in enumerate(user_wallets, 1):
-                        print(_box_line(f"  {_yellow(f'[{i}]')} {w['wallet_id']}  {_dim(w['model'])}  {_bold(w['balance'])} {w['currency']}"))
-                    print(_box_bot())
-                    sel = _prompt("Selecciona", hint=f"1-{len(user_wallets)}")
-                    try:
-                        idx = int(sel) - 1
-                        wallet_id = user_wallets[idx]["wallet_id"]
-                    except (ValueError, IndexError):
-                        _print_result_box("ERROR", "balance", "Seleccion invalida.")
-                        continue
-            if wallet_id and "ADMIN" not in session.auth_roles:
-                my_wallet_ids = [w["wallet_id"] for w in ledger.list_wallets(user_id=session.auth_user_id)]
-                if wallet_id not in my_wallet_ids:
-                    _print_result_box("ERROR", "balance", "No tienes acceso a esa wallet.")
-                    continue
-            input_units = _measure_units(wallet_id)
-            started_at = time.perf_counter()
-            balance = ledger.get_wallet_balance(wallet_id)
-            elapsed_ms = (time.perf_counter() - started_at) * 1000.0
-            result = {"wallet_id": wallet_id, "balance": str(balance)}
-            _print_data_box("Balance", result)
-            _apply_result_to_session(
-                session, action="balance", result=result,
-                revision_id=None, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
-            )
-
-        elif option == "14":
-            _section_header("CONFIGURAR POLITICA")
-            user_id = _prompt("user_id")
-            can_transfer = _prompt("can_transfer", hint="true/false", default="true").lower() in ("true", "1", "yes")
-            daily_limit = _prompt("daily_limit", hint="(opcional, vacio=sin limite)")
-            input_units = _measure_units(user_id, can_transfer, daily_limit)
-            started_at = time.perf_counter()
-            dl = Decimal(daily_limit) if daily_limit else None
-            result = ledger.set_user_policy(user_id, can_transfer=can_transfer, daily_limit=dl)
-            rev = _persist(store, ledger)
-            elapsed_ms = (time.perf_counter() - started_at) * 1000.0
-            _print_data_box("Politica configurada", result if isinstance(result, dict) else {"resultado": result}, rev)
-            _apply_result_to_session(
-                session, action="set-policy", result=result,
-                revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
-            )
-
-        elif option == "15":
-            _section_header("VER POLITICA")
-            user_id = _prompt("user_id")
-            input_units = _measure_units(user_id)
-            started_at = time.perf_counter()
-            result = ledger.get_user_policy(user_id)
-            elapsed_ms = (time.perf_counter() - started_at) * 1000.0
-            _print_data_box("Politica de usuario", result)
-            _apply_result_to_session(
-                session, action="get-policy", result=result,
-                revision_id=None, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
-            )
-
-        elif option == "16":
-            _section_header("LISTAR POLITICAS")
-            input_units = _measure_units("list-policies")
-            started_at = time.perf_counter()
-            result = ledger.list_user_policies()
-            elapsed_ms = (time.perf_counter() - started_at) * 1000.0
-            _print_data_box(f"Politicas ({len(result)} registradas)", result)
-            _apply_result_to_session(
-                session, action="list-policies", result=result,
-                revision_id=None, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
-            )
-
-        elif option == "17":
-            _section_header("ASIGNAR PERFIL DE RIESGO")
-            user_id = _prompt("user_id")
-            profile_name = _prompt("profile_name", hint="STANDARD/LOW/MEDIUM/HIGH/RESTRICTED", default="STANDARD").upper()
-            daily_limit = _prompt("daily_limit", hint="(opcional)")
-            transfer_threshold = _prompt("transfer_alert_threshold", hint="(opcional)")
-            daily_threshold = _prompt("daily_alert_threshold", hint="(opcional)")
-            input_units = _measure_units(user_id, profile_name, daily_limit, transfer_threshold, daily_threshold)
-            started_at = time.perf_counter()
-            dl = Decimal(daily_limit) if daily_limit else None
-            tt = Decimal(transfer_threshold) if transfer_threshold else None
-            dt = Decimal(daily_threshold) if daily_threshold else None
-            result = ledger.set_user_risk_profile(user_id, profile_name=profile_name, daily_limit=dl, transfer_alert_threshold=tt, daily_alert_threshold=dt)
-            rev = _persist(store, ledger)
-            elapsed_ms = (time.perf_counter() - started_at) * 1000.0
-            _print_data_box("Perfil de riesgo asignado", result if isinstance(result, dict) else {"resultado": result}, rev)
-            _apply_result_to_session(
-                session, action="set-risk-profile", result=result,
-                revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
-            )
-
-        elif option == "18":
-            _section_header("VER PERFIL DE RIESGO")
-            user_id = _prompt("user_id")
-            input_units = _measure_units(user_id)
-            started_at = time.perf_counter()
-            result = ledger.get_user_risk_profile(user_id)
-            elapsed_ms = (time.perf_counter() - started_at) * 1000.0
-            _print_data_box("Perfil de riesgo", result)
-            _apply_result_to_session(
-                session, action="get-risk-profile", result=result,
-                revision_id=None, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
-            )
-
-        elif option == "19":
-            _section_header("LISTAR PERFILES DE RIESGO")
-            input_units = _measure_units("list-risk-profiles")
-            started_at = time.perf_counter()
-            result = ledger.list_user_risk_profiles()
-            elapsed_ms = (time.perf_counter() - started_at) * 1000.0
-            _print_data_box(f"Perfiles de riesgo ({len(result)})", result)
-            _apply_result_to_session(
-                session, action="list-risk-profiles", result=result,
-                revision_id=None, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
-            )
-
-        elif option == "20":
-            _section_header("LISTAR ALERTAS")
-            user_id = _prompt("user_id", hint="(opcional)")
-            severity = _prompt("severity", hint="LOW/MEDIUM/HIGH (opcional)")
-            input_units = _measure_units(user_id, severity)
-            started_at = time.perf_counter()
-            result = ledger.list_alerts(user_id=user_id, severity=severity)
-            elapsed_ms = (time.perf_counter() - started_at) * 1000.0
-            _print_data_box(f"Alertas ({len(result)} encontradas)", result)
-            _apply_result_to_session(
-                session, action="list-alerts", result=result,
-                revision_id=None, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
-            )
-
-        elif option == "21":
-            _section_header("HISTORIAL DE REVISIONES")
-            limit_raw = _prompt("limit", default="10")
-            limit = int(limit_raw) if limit_raw.isdigit() else 10
-            input_units = _measure_units(limit)
-            started_at = time.perf_counter()
-            result = store.list_revisions(limit=limit)
-            elapsed_ms = (time.perf_counter() - started_at) * 1000.0
-            _print_data_box(f"Revisiones ({len(result)} recientes)", result)
-            _apply_result_to_session(
-                session, action="list-revisions", result=result,
-                revision_id=None, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
-            )
-
-        else:
-            _print_result_box("ERROR", "invalid-option", f"Opcion '{option}' no reconocida.")
-            _apply_result_to_session(
-                session, action="invalid-option", result=f"Invalid option: {option}",
-                revision_id=None, is_error=True, elapsed_ms=0.0, input_units=_measure_units(option),
-            )
 
 
 if __name__ == "__main__":
