@@ -51,6 +51,8 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         Permission.VIEW_REVISIONS,
     },
     Role.VIEWER: {
+        Permission.CREATE_WALLET,
+        Permission.TRANSFER,
         Permission.VIEW_USERS,
         Permission.VIEW_WALLETS,
         Permission.VIEW_TRANSFERS,
@@ -98,6 +100,22 @@ def hash_password(plain: str, rounds: int = 12) -> str:
 
 def verify_password(plain: str, hashed: str) -> bool:
     return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
+
+
+# ── Invitation & Activation tokens ──────────────────────
+
+import secrets
+import string
+
+_ACTIVATION_ALPHABET = string.ascii_uppercase + string.digits
+
+
+def generate_invitation_token() -> str:
+    return secrets.token_hex(16)
+
+
+def generate_activation_code() -> str:
+    return "".join(secrets.choice(_ACTIVATION_ALPHABET) for _ in range(16))
 
 
 # ── JWT ──────────────────────────────────────────────────

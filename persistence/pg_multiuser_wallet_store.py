@@ -47,6 +47,10 @@ class PgMultiUserWalletStore(WalletLedgerRepository):
                     self._upsert_credentials(cur, snapshot.get("credentials", []))
                 if self._table_exists(cur, "user_roles"):
                     self._sync_roles(cur, snapshot.get("roles", []))
+                if self._table_exists(cur, "admin_invitation_tokens"):
+                    self._sync_invitation_tokens(cur, snapshot.get("admin_invitation_tokens", []))
+                if self._table_exists(cur, "activation_codes"):
+                    self._sync_activation_codes(cur, snapshot.get("activation_codes", []))
                 self._insert_revision(cur, revision_id, snapshot)
 
         return revision_id
@@ -104,6 +108,14 @@ class PgMultiUserWalletStore(WalletLedgerRepository):
                     roles = self._fetch_roles(cur)
                 else:
                     roles = []
+                if self._table_exists(cur, "admin_invitation_tokens"):
+                    invitation_tokens = self._fetch_invitation_tokens(cur)
+                else:
+                    invitation_tokens = []
+                if self._table_exists(cur, "activation_codes"):
+                    activation_codes = self._fetch_activation_codes(cur)
+                else:
+                    activation_codes = []
 
         return {
             "users": users,
@@ -115,6 +127,8 @@ class PgMultiUserWalletStore(WalletLedgerRepository):
             "alerts": alerts,
             "credentials": credentials,
             "roles": roles,
+            "admin_invitation_tokens": invitation_tokens,
+            "activation_codes": activation_codes,
         }
 
     def _fetch_users(self, cur) -> list[dict]:
@@ -274,6 +288,20 @@ class PgMultiUserWalletStore(WalletLedgerRepository):
             for r in cur.fetchall()
         ]
 
+    def _fetch_invitation_tokens(self, cur) -> list[dict]:
+        cur.execute("SELECT token, created_by, created_at, used, used_by FROM admin_invitation_tokens")
+        return [
+            {"token": r[0], "created_by": r[1], "created_at": r[2].isoformat() if r[2] else "", "used": r[3], "used_by": r[4] or ""}
+            for r in cur.fetchall()
+        ]
+
+    def _fetch_activation_codes(self, cur) -> list[dict]:
+        cur.execute("SELECT user_id, code, activated, created_at FROM activation_codes")
+        return [
+            {"user_id": r[0], "code": r[1], "activated": r[2], "created_at": r[3].isoformat() if r[3] else ""}
+            for r in cur.fetchall()
+        ]
+
     # ── Upsert / Sync helpers ────────────────────────────────
 
     def _upsert_users(self, cur, users: list[dict]) -> None:
@@ -430,6 +458,22 @@ class PgMultiUserWalletStore(WalletLedgerRepository):
                 ON CONFLICT (user_id, role) DO NOTHING
                 """,
                 (r["user_id"], r["role"], r.get("granted_at")),
+            )
+
+    def _sync_invitation_tokens(self, cur, tokens: list[dict]) -> None:
+        cur.execute("DELETE FROM admin_invitation_tokens")
+        for t in tokens:
+            cur.execute(
+                "INSERT INTO admin_invitation_tokens (token, created_by, created_at, used, used_by) VALUES (%s, %s, %s, %s, %s)",
+                (t["token"], t["created_by"], t.get("created_at"), t.get("used", False), t.get("used_by", "") or None),
+            )
+
+    def _sync_activation_codes(self, cur, codes: list[dict]) -> None:
+        cur.execute("DELETE FROM activation_codes")
+        for c in codes:
+            cur.execute(
+                "INSERT INTO activation_codes (user_id, code, activated, created_at) VALUES (%s, %s, %s, %s)",
+                (c["user_id"], c["code"], c.get("activated", False), c.get("created_at")),
             )
 
     def _insert_revision(self, cur, revision_id: str, snapshot: dict) -> None:
