@@ -53,6 +53,10 @@ class PgMultiUserWalletStore(WalletLedgerRepository):
                     self._sync_activation_codes(cur, snapshot.get("activation_codes", []))
                 if self._table_exists(cur, "exchange_rates"):
                     self._sync_exchange_rates(cur, snapshot.get("exchange_rates", []))
+                if self._table_exists(cur, "role_permissions"):
+                    self._sync_role_permission_overrides(cur, snapshot.get("role_permission_overrides", {}))
+                if self._table_exists(cur, "user_permissions"):
+                    self._sync_user_permission_overrides(cur, snapshot.get("user_permission_overrides", {}))
                 self._insert_revision(cur, revision_id, snapshot)
 
         return revision_id
@@ -122,6 +126,14 @@ class PgMultiUserWalletStore(WalletLedgerRepository):
                     exchange_rates = self._fetch_exchange_rates(cur)
                 else:
                     exchange_rates = []
+                if self._table_exists(cur, "role_permissions"):
+                    role_permission_overrides = self._fetch_role_permission_overrides(cur)
+                else:
+                    role_permission_overrides = {}
+                if self._table_exists(cur, "user_permissions"):
+                    user_permission_overrides = self._fetch_user_permission_overrides(cur)
+                else:
+                    user_permission_overrides = {}
 
         return {
             "users": users,
@@ -136,6 +148,8 @@ class PgMultiUserWalletStore(WalletLedgerRepository):
             "admin_invitation_tokens": invitation_tokens,
             "activation_codes": activation_codes,
             "exchange_rates": exchange_rates,
+            "role_permission_overrides": role_permission_overrides,
+            "user_permission_overrides": user_permission_overrides,
         }
 
     def _fetch_users(self, cur) -> list[dict]:
@@ -529,6 +543,38 @@ class PgMultiUserWalletStore(WalletLedgerRepository):
                 "INSERT INTO admin_invitation_tokens (token, created_by, created_at, used, used_by) VALUES (%s, %s, %s, %s, %s)",
                 (t["token"], t["created_by"], t.get("created_at"), t.get("used", False), t.get("used_by", "") or None),
             )
+
+    def _fetch_role_permission_overrides(self, cur) -> dict[str, list[str]]:
+        cur.execute("SELECT role, permission_id FROM role_permissions ORDER BY role, permission_id")
+        result: dict[str, list[str]] = {}
+        for r in cur.fetchall():
+            result.setdefault(r[0], []).append(r[1])
+        return result
+
+    def _sync_role_permission_overrides(self, cur, overrides: dict[str, list[str]]) -> None:
+        cur.execute("DELETE FROM role_permissions")
+        for role, perms in overrides.items():
+            for perm in perms:
+                cur.execute(
+                    "INSERT INTO role_permissions (role, permission_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                    (role, perm),
+                )
+
+    def _fetch_user_permission_overrides(self, cur) -> dict[str, list[str]]:
+        cur.execute("SELECT user_id, permission_id FROM user_permissions ORDER BY user_id, permission_id")
+        result: dict[str, list[str]] = {}
+        for r in cur.fetchall():
+            result.setdefault(r[0], []).append(r[1])
+        return result
+
+    def _sync_user_permission_overrides(self, cur, overrides: dict[str, list[str]]) -> None:
+        cur.execute("DELETE FROM user_permissions")
+        for user_id, perms in overrides.items():
+            for perm in perms:
+                cur.execute(
+                    "INSERT INTO user_permissions (user_id, permission_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                    (user_id, perm),
+                )
 
     def _fetch_exchange_rates(self, cur) -> list[dict]:
         cur.execute(
