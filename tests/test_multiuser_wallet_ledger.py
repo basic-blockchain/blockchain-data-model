@@ -290,7 +290,7 @@ def test_refresh_wallet_token_rejects_non_owner():
     assert "no es propietario" in error
 
 
-def test_transfer_rejects_cross_currency():
+def test_transfer_cross_currency_without_rate_fails():
     ledger = MultiUserWalletLedger()
     ledger.create_user("u-a", "A")
     ledger.create_user("u-b", "B")
@@ -301,7 +301,7 @@ def test_transfer_rejects_cross_currency():
         "wallet_user_alpha_01", "wallet_user_bravo_02", "10",
         sender_token=created["auth_token"],
     )
-    assert "monedas diferentes" in error
+    assert "tasa de conversion" in error
     assert "BTC" in error
     assert "SOL" in error
 

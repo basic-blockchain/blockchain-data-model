@@ -51,6 +51,14 @@ class PgMultiUserWalletStore(WalletLedgerRepository):
                     self._sync_invitation_tokens(cur, snapshot.get("admin_invitation_tokens", []))
                 if self._table_exists(cur, "activation_codes"):
                     self._sync_activation_codes(cur, snapshot.get("activation_codes", []))
+                if self._table_exists(cur, "exchange_rates"):
+                    self._sync_exchange_rates(cur, snapshot.get("exchange_rates", []))
+                if self._table_exists(cur, "role_permissions"):
+                    self._sync_role_permission_overrides(cur, snapshot.get("role_permission_overrides", {}))
+                if self._table_exists(cur, "user_permissions"):
+                    self._sync_user_permission_overrides(cur, snapshot.get("user_permission_overrides", {}))
+                if self._table_exists(cur, "audit_log"):
+                    self._sync_audit_log(cur, snapshot.get("audit_log", []))
                 self._insert_revision(cur, revision_id, snapshot)
 
         return revision_id
@@ -116,6 +124,22 @@ class PgMultiUserWalletStore(WalletLedgerRepository):
                     activation_codes = self._fetch_activation_codes(cur)
                 else:
                     activation_codes = []
+                if self._table_exists(cur, "exchange_rates"):
+                    exchange_rates = self._fetch_exchange_rates(cur)
+                else:
+                    exchange_rates = []
+                if self._table_exists(cur, "role_permissions"):
+                    role_permission_overrides = self._fetch_role_permission_overrides(cur)
+                else:
+                    role_permission_overrides = {}
+                if self._table_exists(cur, "user_permissions"):
+                    user_permission_overrides = self._fetch_user_permission_overrides(cur)
+                else:
+                    user_permission_overrides = {}
+                if self._table_exists(cur, "audit_log"):
+                    audit_log = self._fetch_audit_log(cur)
+                else:
+                    audit_log = []
 
         return {
             "users": users,
@@ -129,30 +153,71 @@ class PgMultiUserWalletStore(WalletLedgerRepository):
             "roles": roles,
             "admin_invitation_tokens": invitation_tokens,
             "activation_codes": activation_codes,
+            "exchange_rates": exchange_rates,
+            "role_permission_overrides": role_permission_overrides,
+            "user_permission_overrides": user_permission_overrides,
+            "audit_log": audit_log,
         }
 
     def _fetch_users(self, cur) -> list[dict]:
-        cur.execute("SELECT user_id, display_name, created_at FROM users ORDER BY created_at")
-        return [
-            {
+        has_banned = self._column_exists(cur, "users", "banned")
+        has_updated = self._column_exists(cur, "users", "updated_at")
+        has_deleted = self._column_exists(cur, "users", "deleted_at")
+        has_profile = self._column_exists(cur, "users", "first_name")
+        cols = ["user_id", "display_name", "created_at"]
+        if has_banned:
+            cols.append("banned")
+        if has_updated:
+            cols.append("updated_at")
+        if has_deleted:
+            cols.append("deleted_at")
+        if has_profile:
+            cols.extend(["first_name", "last_name", "email", "username"])
+        cur.execute(f"SELECT {', '.join(cols)} FROM users ORDER BY created_at")
+        results = []
+        for r in cur.fetchall():
+            rec = {
                 "user_id": r[0],
                 "display_name": r[1],
                 "created_at": r[2].isoformat() if r[2] else "",
                 "wallet_ids": [],
             }
-            for r in cur.fetchall()
-        ]
+            idx = 3
+            if has_banned:
+                rec["banned"] = bool(r[idx]); idx += 1
+            if has_updated:
+                rec["updated_at"] = r[idx].isoformat() if r[idx] else ""; idx += 1
+            if has_deleted:
+                rec["deleted_at"] = r[idx].isoformat() if r[idx] else ""; idx += 1
+            if has_profile:
+                rec["first_name"] = r[idx] or ""; idx += 1
+                rec["last_name"] = r[idx] or ""; idx += 1
+                rec["email"] = r[idx] or ""; idx += 1
+                rec["username"] = r[idx] or ""; idx += 1
+            results.append(rec)
+        return results
 
     def _fetch_wallets(self, cur) -> list[dict]:
-        cur.execute(
-            """
-            SELECT wallet_id, user_id, model, currency, balance,
-                   auth_token, token_issued_at, token_expires_at, created_at
-            FROM wallets ORDER BY created_at
-            """
-        )
-        return [
-            {
+        has_frozen = self._column_exists(cur, "wallets", "frozen")
+        if has_frozen:
+            cur.execute(
+                """
+                SELECT wallet_id, user_id, model, currency, balance,
+                       auth_token, token_issued_at, token_expires_at, created_at, frozen
+                FROM wallets ORDER BY created_at
+                """
+            )
+        else:
+            cur.execute(
+                """
+                SELECT wallet_id, user_id, model, currency, balance,
+                       auth_token, token_issued_at, token_expires_at, created_at
+                FROM wallets ORDER BY created_at
+                """
+            )
+        results = []
+        for r in cur.fetchall():
+            rec = {
                 "wallet_id": r[0],
                 "user_id": r[1],
                 "model": r[2],
@@ -164,8 +229,10 @@ class PgMultiUserWalletStore(WalletLedgerRepository):
                 "token_expires_at": r[7],
                 "created_at": r[8].isoformat() if r[8] else "",
             }
-            for r in cur.fetchall()
-        ]
+            if has_frozen:
+                rec["frozen"] = bool(r[9])
+            results.append(rec)
+        return results
 
     def _fetch_policies(self, cur) -> list[dict]:
         cur.execute("SELECT user_id, can_transfer, daily_limit, updated_at FROM user_policies")
@@ -216,16 +283,30 @@ class PgMultiUserWalletStore(WalletLedgerRepository):
         ]
 
     def _fetch_transfers(self, cur) -> list[dict]:
-        cur.execute(
-            """
-            SELECT transfer_id, type, sender_wallet, receiver_wallet,
-                   amount, fee, nonce, previous_hash, tx_hash,
-                   reference, status, created_at
-            FROM transfers ORDER BY created_at
-            """
-        )
-        return [
-            {
+        has_exchange_cols = self._column_exists(cur, "transfers", "sender_currency")
+        if has_exchange_cols:
+            cur.execute(
+                """
+                SELECT transfer_id, type, sender_wallet, receiver_wallet,
+                       amount, fee, nonce, previous_hash, tx_hash,
+                       reference, status, created_at,
+                       sender_currency, receiver_currency,
+                       exchange_rate, exchange_commission, converted_amount
+                FROM transfers ORDER BY created_at
+                """
+            )
+        else:
+            cur.execute(
+                """
+                SELECT transfer_id, type, sender_wallet, receiver_wallet,
+                       amount, fee, nonce, previous_hash, tx_hash,
+                       reference, status, created_at
+                FROM transfers ORDER BY created_at
+                """
+            )
+        results = []
+        for r in cur.fetchall():
+            rec = {
                 "transfer_id": r[0],
                 "type": r[1],
                 "sender_wallet": r[2] or "",
@@ -239,8 +320,19 @@ class PgMultiUserWalletStore(WalletLedgerRepository):
                 "status": r[10],
                 "created_at": r[11].isoformat() if r[11] else "",
             }
-            for r in cur.fetchall()
-        ]
+            if has_exchange_cols:
+                if r[12]:
+                    rec["sender_currency"] = r[12]
+                if r[13]:
+                    rec["receiver_currency"] = r[13]
+                if r[14] is not None:
+                    rec["exchange_rate"] = str(r[14])
+                if r[15] is not None:
+                    rec["exchange_commission"] = str(r[15])
+                if r[16] is not None:
+                    rec["converted_amount"] = str(r[16])
+            results.append(rec)
+        return results
 
     def _fetch_alerts(self, cur) -> list[dict]:
         cur.execute(
@@ -266,16 +358,24 @@ class PgMultiUserWalletStore(WalletLedgerRepository):
         ]
 
     def _fetch_credentials(self, cur) -> list[dict]:
-        cur.execute("SELECT user_id, password_hash, created_at, updated_at FROM user_credentials")
-        return [
-            {
+        has_temp = self._column_exists(cur, "user_credentials", "password_temp")
+        if has_temp:
+            cur.execute("SELECT user_id, password_hash, created_at, updated_at, password_temp, token_temp FROM user_credentials")
+        else:
+            cur.execute("SELECT user_id, password_hash, created_at, updated_at FROM user_credentials")
+        results = []
+        for r in cur.fetchall():
+            rec = {
                 "user_id": r[0],
                 "password_hash": r[1],
                 "created_at": r[2].isoformat() if r[2] else "",
                 "updated_at": r[3].isoformat() if r[3] else "",
             }
-            for r in cur.fetchall()
-        ]
+            if has_temp:
+                rec["password_temp"] = bool(r[4])
+                rec["token_temp"] = r[5] or ""
+            results.append(rec)
+        return results
 
     def _fetch_roles(self, cur) -> list[dict]:
         cur.execute("SELECT user_id, role, granted_at FROM user_roles")
@@ -305,34 +405,68 @@ class PgMultiUserWalletStore(WalletLedgerRepository):
     # ── Upsert / Sync helpers ────────────────────────────────
 
     def _upsert_users(self, cur, users: list[dict]) -> None:
+        has_banned = self._column_exists(cur, "users", "banned")
+        has_updated = self._column_exists(cur, "users", "updated_at")
+        has_deleted = self._column_exists(cur, "users", "deleted_at")
         for u in users:
+            cols = ["user_id", "display_name", "created_at"]
+            vals = [u["user_id"], u["display_name"], u.get("created_at")]
+            updates = ["display_name = EXCLUDED.display_name"]
+            if has_banned:
+                cols.append("banned"); vals.append(u.get("banned", False)); updates.append("banned = EXCLUDED.banned")
+            if has_updated:
+                cols.append("updated_at"); vals.append(u.get("updated_at") or None); updates.append("updated_at = EXCLUDED.updated_at")
+            if has_deleted:
+                cols.append("deleted_at"); vals.append(u.get("deleted_at") or None); updates.append("deleted_at = EXCLUDED.deleted_at")
+            if self._column_exists(cur, "users", "first_name"):
+                for field in ("first_name", "last_name", "email", "username"):
+                    cols.append(field); vals.append(u.get(field, "")); updates.append(f"{field} = EXCLUDED.{field}")
+            placeholders = ", ".join(["%s"] * len(vals))
+            col_names = ", ".join(cols)
+            update_clause = ", ".join(updates)
             cur.execute(
-                """
-                INSERT INTO users (user_id, display_name, created_at)
-                VALUES (%s, %s, %s)
-                ON CONFLICT (user_id) DO UPDATE SET display_name = EXCLUDED.display_name
-                """,
-                (u["user_id"], u["display_name"], u.get("created_at")),
+                f"INSERT INTO users ({col_names}) VALUES ({placeholders}) ON CONFLICT (user_id) DO UPDATE SET {update_clause}",
+                vals,
             )
 
     def _upsert_wallets(self, cur, wallets: list[dict]) -> None:
+        has_frozen = self._column_exists(cur, "wallets", "frozen")
         for w in wallets:
-            cur.execute(
-                """
-                INSERT INTO wallets (wallet_id, user_id, model, currency,
-                                     balance, auth_token, token_issued_at, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (wallet_id) DO UPDATE SET
-                    balance = EXCLUDED.balance,
-                    auth_token = EXCLUDED.auth_token,
-                    token_issued_at = EXCLUDED.token_issued_at
-                """,
-                (
-                    w["wallet_id"], w["user_id"], w["model"], w["currency"],
-                    w["balance"], w["auth_token"], w["token_issued_at"],
-                    w.get("created_at"),
-                ),
-            )
+            if has_frozen:
+                cur.execute(
+                    """
+                    INSERT INTO wallets (wallet_id, user_id, model, currency,
+                                         balance, auth_token, token_issued_at, created_at, frozen)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (wallet_id) DO UPDATE SET
+                        balance = EXCLUDED.balance,
+                        auth_token = EXCLUDED.auth_token,
+                        token_issued_at = EXCLUDED.token_issued_at,
+                        frozen = EXCLUDED.frozen
+                    """,
+                    (
+                        w["wallet_id"], w["user_id"], w["model"], w["currency"],
+                        w["balance"], w["auth_token"], w["token_issued_at"],
+                        w.get("created_at"), w.get("frozen", False),
+                    ),
+                )
+            else:
+                cur.execute(
+                    """
+                    INSERT INTO wallets (wallet_id, user_id, model, currency,
+                                         balance, auth_token, token_issued_at, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (wallet_id) DO UPDATE SET
+                        balance = EXCLUDED.balance,
+                        auth_token = EXCLUDED.auth_token,
+                        token_issued_at = EXCLUDED.token_issued_at
+                    """,
+                    (
+                        w["wallet_id"], w["user_id"], w["model"], w["currency"],
+                        w["balance"], w["auth_token"], w["token_issued_at"],
+                        w.get("created_at"),
+                    ),
+                )
 
     def _upsert_policies(self, cur, policies: list[dict]) -> None:
         for p in policies:
@@ -383,26 +517,56 @@ class PgMultiUserWalletStore(WalletLedgerRepository):
 
     def _sync_transfers(self, cur, transfers: list[dict]) -> None:
         cur.execute("DELETE FROM transfers")
+        has_exchange_cols = self._column_exists(cur, "transfers", "sender_currency")
         for t in transfers:
-            cur.execute(
-                """
-                INSERT INTO transfers
-                    (transfer_id, type, sender_wallet, receiver_wallet,
-                     amount, fee, nonce, previous_hash, tx_hash,
-                     reference, status, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """,
-                (
-                    t["transfer_id"], t["type"],
-                    t.get("sender_wallet") or None,
-                    t["receiver_wallet"],
-                    t["amount"], t["fee"], t.get("nonce"),
-                    t.get("previous_hash") or None,
-                    t.get("tx_hash") or None,
-                    t.get("reference", ""), t.get("status", "SETTLED"),
-                    t.get("created_at"),
-                ),
-            )
+            if has_exchange_cols:
+                cur.execute(
+                    """
+                    INSERT INTO transfers
+                        (transfer_id, type, sender_wallet, receiver_wallet,
+                         amount, fee, nonce, previous_hash, tx_hash,
+                         reference, status, created_at,
+                         sender_currency, receiver_currency,
+                         exchange_rate, exchange_commission, converted_amount)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                            %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        t["transfer_id"], t["type"],
+                        t.get("sender_wallet") or None,
+                        t["receiver_wallet"],
+                        t["amount"], t["fee"], t.get("nonce"),
+                        t.get("previous_hash") or None,
+                        t.get("tx_hash") or None,
+                        t.get("reference", ""), t.get("status", "SETTLED"),
+                        t.get("created_at"),
+                        t.get("sender_currency"),
+                        t.get("receiver_currency"),
+                        t.get("exchange_rate"),
+                        t.get("exchange_commission"),
+                        t.get("converted_amount"),
+                    ),
+                )
+            else:
+                cur.execute(
+                    """
+                    INSERT INTO transfers
+                        (transfer_id, type, sender_wallet, receiver_wallet,
+                         amount, fee, nonce, previous_hash, tx_hash,
+                         reference, status, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        t["transfer_id"], t["type"],
+                        t.get("sender_wallet") or None,
+                        t["receiver_wallet"],
+                        t["amount"], t["fee"], t.get("nonce"),
+                        t.get("previous_hash") or None,
+                        t.get("tx_hash") or None,
+                        t.get("reference", ""), t.get("status", "SETTLED"),
+                        t.get("created_at"),
+                    ),
+                )
 
     def _sync_alerts(self, cur, alerts: list[dict]) -> None:
         cur.execute("DELETE FROM alerts")
@@ -434,19 +598,34 @@ class PgMultiUserWalletStore(WalletLedgerRepository):
             )
 
     def _upsert_credentials(self, cur, credentials: list[dict]) -> None:
+        has_temp = self._column_exists(cur, "user_credentials", "password_temp")
         for c in credentials:
             if not c.get("password_hash"):
                 continue
-            cur.execute(
-                """
-                INSERT INTO user_credentials (user_id, password_hash, created_at, updated_at)
-                VALUES (%s, %s, %s, %s)
-                ON CONFLICT (user_id) DO UPDATE SET
-                    password_hash = EXCLUDED.password_hash,
-                    updated_at = EXCLUDED.updated_at
-                """,
-                (c["user_id"], c["password_hash"], c.get("created_at"), c.get("updated_at")),
-            )
+            if has_temp:
+                cur.execute(
+                    """
+                    INSERT INTO user_credentials (user_id, password_hash, created_at, updated_at, password_temp, token_temp)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (user_id) DO UPDATE SET
+                        password_hash = EXCLUDED.password_hash,
+                        updated_at = EXCLUDED.updated_at,
+                        password_temp = EXCLUDED.password_temp,
+                        token_temp = EXCLUDED.token_temp
+                    """,
+                    (c["user_id"], c["password_hash"], c.get("created_at"), c.get("updated_at"), c.get("password_temp", False), c.get("token_temp", "") or None),
+                )
+            else:
+                cur.execute(
+                    """
+                    INSERT INTO user_credentials (user_id, password_hash, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (user_id) DO UPDATE SET
+                        password_hash = EXCLUDED.password_hash,
+                        updated_at = EXCLUDED.updated_at
+                    """,
+                    (c["user_id"], c["password_hash"], c.get("created_at"), c.get("updated_at")),
+                )
 
     def _sync_roles(self, cur, roles: list[dict]) -> None:
         cur.execute("DELETE FROM user_roles")
@@ -466,6 +645,104 @@ class PgMultiUserWalletStore(WalletLedgerRepository):
             cur.execute(
                 "INSERT INTO admin_invitation_tokens (token, created_by, created_at, used, used_by) VALUES (%s, %s, %s, %s, %s)",
                 (t["token"], t["created_by"], t.get("created_at"), t.get("used", False), t.get("used_by", "") or None),
+            )
+
+    def _fetch_role_permission_overrides(self, cur) -> dict[str, list[str]]:
+        cur.execute("SELECT role, permission_id FROM role_permissions ORDER BY role, permission_id")
+        result: dict[str, list[str]] = {}
+        for r in cur.fetchall():
+            result.setdefault(r[0], []).append(r[1])
+        return result
+
+    def _sync_role_permission_overrides(self, cur, overrides: dict[str, list[str]]) -> None:
+        cur.execute("DELETE FROM role_permissions")
+        for role, perms in overrides.items():
+            for perm in perms:
+                cur.execute(
+                    "INSERT INTO role_permissions (role, permission_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                    (role, perm),
+                )
+
+    def _fetch_user_permission_overrides(self, cur) -> dict[str, list[str]]:
+        cur.execute("SELECT user_id, permission_id FROM user_permissions ORDER BY user_id, permission_id")
+        result: dict[str, list[str]] = {}
+        for r in cur.fetchall():
+            result.setdefault(r[0], []).append(r[1])
+        return result
+
+    def _sync_user_permission_overrides(self, cur, overrides: dict[str, list[str]]) -> None:
+        cur.execute("DELETE FROM user_permissions")
+        for user_id, perms in overrides.items():
+            for perm in perms:
+                cur.execute(
+                    "INSERT INTO user_permissions (user_id, permission_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                    (user_id, perm),
+                )
+
+    def _fetch_audit_log(self, cur) -> list[dict]:
+        cur.execute(
+            "SELECT log_id, timestamp, actor_id, action, target_type, target_id, details FROM audit_log ORDER BY timestamp"
+        )
+        return [
+            {
+                "log_id": r[0],
+                "timestamp": r[1].isoformat() if r[1] else "",
+                "actor_id": r[2],
+                "action": r[3],
+                "target_type": r[4],
+                "target_id": r[5],
+                "details": r[6] if isinstance(r[6], dict) else {},
+            }
+            for r in cur.fetchall()
+        ]
+
+    def _sync_audit_log(self, cur, logs: list[dict]) -> None:
+        for entry in logs:
+            import json as _json
+            details_val = entry.get("details", {})
+            if isinstance(details_val, dict):
+                details_val = _json.dumps(details_val)
+            cur.execute(
+                """
+                INSERT INTO audit_log (log_id, timestamp, actor_id, action, target_type, target_id, details)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (log_id) DO NOTHING
+                """,
+                (
+                    entry["log_id"], entry.get("timestamp"), entry["actor_id"],
+                    entry["action"], entry["target_type"], entry["target_id"],
+                    details_val,
+                ),
+            )
+
+    def _fetch_exchange_rates(self, cur) -> list[dict]:
+        cur.execute(
+            "SELECT pair_id, from_currency, to_currency, rate, commission_pct, updated_at FROM exchange_rates"
+        )
+        return [
+            {
+                "pair_id": r[0],
+                "from_currency": r[1],
+                "to_currency": r[2],
+                "rate": str(r[3]),
+                "commission_pct": str(r[4]),
+                "updated_at": r[5].isoformat() if r[5] else "",
+            }
+            for r in cur.fetchall()
+        ]
+
+    def _sync_exchange_rates(self, cur, rates: list[dict]) -> None:
+        cur.execute("DELETE FROM exchange_rates")
+        for er in rates:
+            cur.execute(
+                """
+                INSERT INTO exchange_rates (pair_id, from_currency, to_currency, rate, commission_pct, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    er["pair_id"], er["from_currency"], er["to_currency"],
+                    er["rate"], er["commission_pct"], er.get("updated_at"),
+                ),
             )
 
     def _sync_activation_codes(self, cur, codes: list[dict]) -> None:
@@ -501,3 +778,11 @@ class PgMultiUserWalletStore(WalletLedgerRepository):
     def _table_exists(cur, table_name: str) -> bool:
         cur.execute("SELECT to_regclass(%s)", (table_name,))
         return cur.fetchone()[0] is not None
+
+    @staticmethod
+    def _column_exists(cur, table_name: str, column_name: str) -> bool:
+        cur.execute(
+            "SELECT 1 FROM information_schema.columns WHERE table_name = %s AND column_name = %s",
+            (table_name, column_name),
+        )
+        return cur.fetchone() is not None
