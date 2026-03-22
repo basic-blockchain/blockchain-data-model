@@ -5,11 +5,15 @@ import sys
 from pathlib import Path
 
 
+TEST_JWT_SECRET = "test-secret-key-for-jwt-minimum-32-chars!!"
+
+
 def _run_cli(args, cwd: Path):
     cmd = [sys.executable, "scripts/multiuser_wallet_cli.py", *args]
     env = os.environ.copy()
     env["PERSISTENCE_BACKEND"] = "json"
     env["PYTHONIOENCODING"] = "utf-8"
+    env["JWT_SECRET"] = TEST_JWT_SECRET
     completed = subprocess.run(
         cmd,
         cwd=str(cwd),
@@ -24,15 +28,26 @@ def _run_cli(args, cwd: Path):
     return completed
 
 
+def _bootstrap_admin(store_file: str, cwd: Path) -> str:
+    """Register first user (becomes ADMIN) and return JWT token."""
+    _run_cli(["--store-file", store_file, "register", "--user-id", "admin", "--display-name", "Admin", "--password", "admin123"], cwd=cwd)
+    out = _run_cli(["--store-file", store_file, "login", "--user-id", "admin", "--password", "admin123", "--json"], cwd=cwd)
+    payload = json.loads(out.stdout)
+    return payload["result"]["access_token"]
+
+
 def test_cli_accepts_json_flag_before_subcommand(tmp_path):
     repo_root = Path(__file__).resolve().parents[1]
     store_file = tmp_path / "wallet-ledger.json"
 
+    token = _bootstrap_admin(str(store_file), repo_root)
     out = _run_cli(
         [
             "--json",
             "--store-file",
             str(store_file),
+            "--token",
+            token,
             "create-user",
             "--user-id",
             "u1",
@@ -50,10 +65,13 @@ def test_cli_accepts_json_flag_after_subcommand(tmp_path):
     repo_root = Path(__file__).resolve().parents[1]
     store_file = tmp_path / "wallet-ledger.json"
 
+    token = _bootstrap_admin(str(store_file), repo_root)
     _run_cli(
         [
             "--store-file",
             str(store_file),
+            "--token",
+            token,
             "create-user",
             "--user-id",
             "u1",
@@ -67,6 +85,8 @@ def test_cli_accepts_json_flag_after_subcommand(tmp_path):
         [
             "--store-file",
             str(store_file),
+            "--token",
+            token,
             "list-users",
             "--json",
         ],
@@ -75,7 +95,7 @@ def test_cli_accepts_json_flag_after_subcommand(tmp_path):
     assert out.returncode == 0, out.stderr
     payload = json.loads(out.stdout)
     assert payload["success"] is True
-    assert len(payload["result"]) == 1
+    assert len(payload["result"]) == 2
 
 
 def test_cli_returns_non_zero_on_domain_error(tmp_path):
