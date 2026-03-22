@@ -24,6 +24,7 @@ class UserRecord:
     user_id: str
     display_name: str
     created_at: str
+    banned: bool = False
 
 
 @dataclass
@@ -36,6 +37,7 @@ class WalletRecord:
     auth_token: str
     token_issued_at: int
     created_at: str
+    frozen: bool = False
 
 
 @dataclass
@@ -348,6 +350,8 @@ class MultiUserWalletLedger:
     def login(self, user_id: str, password: str, jwt_secret: str, jwt_ttl: int = 3600, activation_code: str = "") -> dict | str:
         if not self.authenticate(user_id, password):
             return "Error: credenciales invalidas."
+        if self.is_user_banned(user_id):
+            return "Error: cuenta suspendida. Contacta a soporte tecnico o servicio al cliente."
         if not self.is_account_activated(user_id):
             if not activation_code:
                 return "Error: cuenta no activada. Se requiere codigo de activacion para el primer inicio de sesion."
@@ -757,6 +761,8 @@ class MultiUserWalletLedger:
             return "Error: amount debe ser mayor a cero."
         if wallet_id not in self.wallets:
             return f"Error: wallet {wallet_id} no existe."
+        if self.wallets[wallet_id].frozen:
+            return f"Error: wallet {wallet_id} esta congelada. No se puede realizar mint."
 
         wallet = self.wallets[wallet_id]
         self._refresh_wallet_token_if_expired(wallet)
@@ -828,6 +834,8 @@ class MultiUserWalletLedger:
             return f"Error: wallet {treasury_wallet_id} no pertenece a tesoreria."
         if treasury.model != target.model:
             return f"Error: no se puede recargar entre modelos diferentes ({treasury.model} -> {target.model})."
+        if target.frozen:
+            return f"Error: wallet destino {target_wallet_id} esta congelada. No se puede recargar."
 
         is_cross_currency = treasury.currency != target.currency
         exchange_metadata = {}
@@ -1022,6 +1030,51 @@ class MultiUserWalletLedger:
         perms = self.user_permission_overrides.get(user_id, [])
         return {"user_id": user_id, "permissions": sorted(perms)}
 
+    # ── Freeze wallet / Ban user ────────────────────────
+
+    def freeze_wallet(self, wallet_id: str) -> dict | str:
+        if wallet_id not in self.wallets:
+            return f"Error: wallet {wallet_id} no existe."
+        self.wallets[wallet_id].frozen = True
+        return {"wallet_id": wallet_id, "frozen": True, "message": f"Wallet {wallet_id} congelada."}
+
+    def unfreeze_wallet(self, wallet_id: str) -> dict | str:
+        if wallet_id not in self.wallets:
+            return f"Error: wallet {wallet_id} no existe."
+        self.wallets[wallet_id].frozen = False
+        return {"wallet_id": wallet_id, "frozen": False, "message": f"Wallet {wallet_id} descongelada."}
+
+    def is_wallet_frozen(self, wallet_id: str) -> bool:
+        wallet = self.wallets.get(wallet_id)
+        return wallet.frozen if wallet else False
+
+    def ban_user(self, user_id: str) -> dict | str:
+        if user_id not in self.users:
+            return f"Error: usuario {user_id} no existe."
+        if user_id == TREASURY_USER_ID:
+            return "Error: no se puede banear al usuario de tesoreria."
+        self.users[user_id].banned = True
+        frozen_wallets = []
+        for wid in self.user_wallets.get(user_id, []):
+            self.wallets[wid].frozen = True
+            frozen_wallets.append(wid)
+        return {"user_id": user_id, "banned": True, "frozen_wallets": frozen_wallets, "message": f"Usuario {user_id} baneado. {len(frozen_wallets)} wallet(s) congelada(s)."}
+
+    def unban_user(self, user_id: str, unfreeze_wallets: bool = True) -> dict | str:
+        if user_id not in self.users:
+            return f"Error: usuario {user_id} no existe."
+        self.users[user_id].banned = False
+        unfrozen_wallets = []
+        if unfreeze_wallets:
+            for wid in self.user_wallets.get(user_id, []):
+                self.wallets[wid].frozen = False
+                unfrozen_wallets.append(wid)
+        return {"user_id": user_id, "banned": False, "unfrozen_wallets": unfrozen_wallets, "message": f"Usuario {user_id} desbaneado. {len(unfrozen_wallets)} wallet(s) descongelada(s)."}
+
+    def is_user_banned(self, user_id: str) -> bool:
+        user = self.users.get(user_id)
+        return user.banned if user else False
+
     # ── Transfer ─────────────────────────────────────────
 
     def transfer(
@@ -1048,6 +1101,12 @@ class MultiUserWalletLedger:
 
         sender = self.wallets[sender_wallet]
         receiver = self.wallets[receiver_wallet]
+        if sender.frozen:
+            return f"Error: wallet emisor {sender_wallet} esta congelada. No se puede transferir."
+        if receiver.frozen:
+            return f"Error: wallet receptor {receiver_wallet} esta congelada. No se puede recibir transferencias."
+        if self.is_user_banned(sender.user_id):
+            return f"Error: usuario {sender.user_id} esta suspendido. No se puede transferir."
         self._refresh_wallet_token_if_expired(receiver)
         if sender.model != receiver.model:
             return f"Error: no se puede transferir entre modelos diferentes ({sender.model} -> {receiver.model})."
@@ -1266,6 +1325,7 @@ class MultiUserWalletLedger:
                 "display_name": user.display_name,
                 "created_at": user.created_at,
                 "wallet_ids": list(self.user_wallets.get(user.user_id, [])),
+                "banned": user.banned,
             }
             for user in self.users.values()
         ]
@@ -1290,6 +1350,7 @@ class MultiUserWalletLedger:
                 "utxo_count": len(self.utxos.get(wallet.wallet_id, [])),
                 **self._token_payload(wallet),
                 "created_at": wallet.created_at,
+                "frozen": wallet.frozen,
             }
             for wallet in records
         ]
@@ -1331,6 +1392,7 @@ class MultiUserWalletLedger:
                 user_id=user_id,
                 display_name=str(user.get("display_name", user_id)),
                 created_at=str(user.get("created_at", cls._timestamp())),
+                banned=bool(user.get("banned", False)),
             )
             ledger.user_wallets[user_id] = []
 
@@ -1351,6 +1413,7 @@ class MultiUserWalletLedger:
                 auth_token=str(wallet.get("auth_token", cls._build_wallet_token(12))),
                 token_issued_at=int(str(wallet.get("token_issued_at", cls._now_epoch()))),
                 created_at=str(wallet.get("created_at", cls._timestamp())),
+                frozen=bool(wallet.get("frozen", False)),
             )
             ledger.wallets[wallet_id] = record
             ledger.utxos[wallet_id] = []
