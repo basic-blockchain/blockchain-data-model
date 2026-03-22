@@ -169,12 +169,70 @@ Comportamiento UX actual:
 | Multiusuario CLI | set-risk-profile | Si | data/multiuser/wallet-ledger.json |
 | Multiusuario CLI | balance/list-users/list-wallets/list-utxos/snapshot/list-revisions/get-policy/list-policies/get-risk-profile/list-risk-profiles/list-alerts/verify-integrity | No | Solo lectura |
 
-## Nota de compatibilidad PostgreSQL
+## Setup con PostgreSQL
 
-Si trabajas con backend PostgreSQL y vienes de un esquema antiguo, aplica migraciones para habilitar tablas de auth/roles:
+### 1. Configurar .env
+
+```bash
+cp .env.example .env
+# Editar .env con credenciales reales de PostgreSQL
+```
+
+El archivo `.env` se carga automaticamente por `config/settings.py`. Las variables de entorno del sistema toman precedencia sobre `.env`.
+
+### 2. Ejecutar migraciones
 
 ```bash
 PYTHONPATH=. py migrations/migrate.py
 ```
 
-La aplicacion ahora tolera ausencia temporal de tablas auth/roles para no bloquear operaciones de wallets, pero la migracion sigue siendo recomendada.
+Esto crea la base de datos si no existe y aplica:
+- V001: Tablas core (users, wallets, transfers, policies, risk_profiles, alerts, simulation_runs, traceability)
+- V002: Tablas de autenticacion (user_credentials, user_roles)
+
+### 3. Verificar backend activo
+
+Al iniciar `py scripts/multiuser_terminal.py`, el banner muestra:
+- **Verde**: `PostgreSQL (blockchain_data_model)` — leyendo/escribiendo en PG
+- **Amarillo**: `JSON (local files)` — leyendo/escribiendo en archivos JSON locales
+
+Si ves JSON pero esperabas PostgreSQL, verifica que `.env` tenga `PERSISTENCE_BACKEND=postgres` y `DATABASE_URL` correcto.
+
+### 4. Cambiar entre backends
+
+```bash
+# Modo PostgreSQL
+PERSISTENCE_BACKEND=postgres py scripts/multiuser_terminal.py
+
+# Modo JSON (default si no hay .env)
+PERSISTENCE_BACKEND=json py scripts/multiuser_terminal.py
+```
+
+Los datos de cada backend son independientes. Crear datos en JSON no los replica en PostgreSQL y viceversa.
+
+## Menu completo del terminal interactivo (v2.4.0)
+
+| # | Comando | Seccion | Descripcion |
+|---|---------|---------|-------------|
+| 1 | create-user | Usuarios & Wallets | Registrar nuevo usuario |
+| 2 | create-wallet | Usuarios & Wallets | Crear wallet UTXO o ACCOUNT |
+| 9 | refresh-token | Usuarios & Wallets | Renovar token de autenticacion |
+| 12 | list-users | Usuarios & Wallets | Listar usuarios registrados |
+| 13 | balance | Usuarios & Wallets | Consultar balance de wallet |
+| 3 | mint | Transacciones | Emitir tokens a wallet |
+| 4 | transfer | Transacciones | Transferir fondos |
+| 10 | transfer-wizard | Transacciones | Asistente guiado con confirmacion |
+| 14 | set-policy | Politicas & Riesgo | Configurar politica de transferencia |
+| 15 | get-policy | Politicas & Riesgo | Ver politica de un usuario |
+| 16 | list-policies | Politicas & Riesgo | Listar todas las politicas |
+| 17 | set-risk-profile | Politicas & Riesgo | Asignar perfil de riesgo |
+| 18 | get-risk-profile | Politicas & Riesgo | Ver perfil de riesgo |
+| 19 | list-risk-profiles | Politicas & Riesgo | Listar perfiles de riesgo |
+| 20 | list-alerts | Politicas & Riesgo | Ver alertas generadas |
+| 5 | list-wallets | Consultas | Listar wallets |
+| 6 | list-utxos | Consultas | Listar UTXOs |
+| 7 | verify-integrity | Consultas | Verificar nonce + hash-chain |
+| 8 | snapshot | Consultas | Estado completo del ledger |
+| 21 | list-revisions | Consultas | Historial de revisiones |
+| 11 | dashboard | Sistema | Metricas de sesion |
+| 0 | exit | Sistema | Salir del terminal |
