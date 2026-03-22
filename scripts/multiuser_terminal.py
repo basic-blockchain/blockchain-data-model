@@ -144,10 +144,10 @@ def _print_banner() -> None:
 
 # ── Menu ─────────────────────────────────────────────────
 
-MENU_SECTIONS = [
+ADMIN_MENU = [
     ("USUARIOS & WALLETS", [
         ("1", "create-user", "Registrar nuevo usuario en el ledger"),
-        ("2", "create-wallet", "Crear wallet UTXO o ACCOUNT para un usuario"),
+        ("2", "create-wallet", "Crear wallet UTXO o ACCOUNT"),
         ("9", "refresh-token", "Renovar token de autenticacion de wallet"),
         ("12", "list-users", "Listar usuarios registrados"),
         ("13", "balance", "Consultar balance de una wallet"),
@@ -161,8 +161,8 @@ MENU_SECTIONS = [
         ("14", "set-policy", "Configurar politica de transferencia"),
         ("15", "get-policy", "Ver politica de un usuario"),
         ("16", "list-policies", "Listar todas las politicas"),
-        ("17", "set-risk-profile", "Asignar perfil de riesgo a usuario"),
-        ("18", "get-risk-profile", "Ver perfil de riesgo de un usuario"),
+        ("17", "set-risk-profile", "Asignar perfil de riesgo"),
+        ("18", "get-risk-profile", "Ver perfil de riesgo"),
         ("19", "list-risk-profiles", "Listar perfiles de riesgo"),
         ("20", "list-alerts", "Ver alertas generadas"),
     ]),
@@ -174,24 +174,73 @@ MENU_SECTIONS = [
         ("21", "list-revisions", "Historial de revisiones del ledger"),
     ]),
     ("SISTEMA", [
+        ("22", "generate-admin-token", "Generar token de invitacion ADMIN"),
         ("11", "dashboard", "Metricas de sesion y rendimiento"),
         ("0", "exit", "Salir del terminal"),
     ]),
 ]
 
+OPERATOR_MENU = [
+    ("WALLETS", [
+        ("2", "create-wallet", "Crear wallet UTXO o ACCOUNT"),
+        ("9", "refresh-token", "Renovar token de wallet"),
+        ("13", "balance", "Consultar balance"),
+    ]),
+    ("TRANSACCIONES", [
+        ("3", "mint", "Emitir tokens"),
+        ("4", "transfer", "Transferir fondos"),
+        ("10", "transfer-wizard", "Asistente de transferencia"),
+    ]),
+    ("CONSULTAS", [
+        ("5", "list-wallets", "Listar mis wallets"),
+        ("6", "list-utxos", "Listar mis UTXOs"),
+        ("7", "verify-integrity", "Verificar integridad"),
+    ]),
+    ("SISTEMA", [
+        ("0", "exit", "Salir"),
+    ]),
+]
 
-def _print_menu() -> None:
+VIEWER_MENU = [
+    ("WALLETS", [
+        ("13", "balance", "Consultar balance"),
+    ]),
+    ("CONSULTAS", [
+        ("5", "list-wallets", "Listar mis wallets"),
+        ("6", "list-utxos", "Listar mis UTXOs"),
+        ("7", "verify-integrity", "Verificar integridad"),
+    ]),
+    ("SISTEMA", [
+        ("0", "exit", "Salir"),
+    ]),
+]
+
+MENU_SECTIONS = ADMIN_MENU  # default fallback
+
+
+def _get_menu_for_roles(roles: list[str]) -> list:
+    if "ADMIN" in roles:
+        return ADMIN_MENU
+    if "OPERATOR" in roles:
+        return OPERATOR_MENU
+    if "VIEWER" in roles:
+        return VIEWER_MENU
+    return VIEWER_MENU
+
+
+def _print_menu(menu: list | None = None) -> None:
+    sections = menu or MENU_SECTIONS
     print()
     print(_box_top())
     print(_box_line(_bold(_cyan("  MENU PRINCIPAL")), "center"))
     print(_box_mid())
-    for section_idx, (section_name, items) in enumerate(MENU_SECTIONS):
+    for section_idx, (section_name, items) in enumerate(sections):
         print(_box_line(f"  {_dim('──')} {_bold(section_name)} {_dim('─' * (W - len(section_name) - 8))}"))
         for num, name, desc in items:
             num_styled = _yellow(f"[{num:>2}]")
             name_styled = _bold(name)
             print(_box_line(f"   {num_styled} {name_styled:<24} {_dim(desc)}"))
-        if section_idx < len(MENU_SECTIONS) - 1:
+        if section_idx < len(sections) - 1:
             print(_box_line())
     print(_box_bot())
 
@@ -584,7 +633,14 @@ def _auth_flow(store_file) -> SessionState:
     session = SessionState()
     store, ledger = _load(store_file)
     settings = get_settings()
+    jwt_secret = settings.jwt_secret
+    jwt_ttl = settings.jwt_ttl_seconds
 
+    if not jwt_secret:
+        print(_red("  JWT_SECRET no configurado en .env"))
+        raise SystemExit(1)
+
+    # ── 1. Bootstrap: ledger vacio → crear primer ADMIN ──────────
     if ledger.is_empty():
         print()
         print(_box_top())
@@ -602,6 +658,89 @@ def _auth_flow(store_file) -> SessionState:
         store.save_ledger(ledger)
         _print_result_box("SUCCESS", "bootstrap", f"Usuario ADMIN '{user_id}' creado. Ahora inicia sesion.")
 
+    # ── 2. Ledger con usuarios → elegir Login o Registro ─────────
+    else:
+        print()
+        print(_box_top())
+        print(_box_line(_cyan("  BIENVENIDO AL SISTEMA")))
+        print(_box_mid())
+        print(_box_line(f"  {_yellow('[L]')} Iniciar sesion"))
+        print(_box_line(f"  {_yellow('[R]')} Crear cuenta"))
+        print(_box_bot())
+        print()
+        choice = _prompt("Opcion", hint="L / R").upper()
+
+        # ── 3. Registro de nueva cuenta ──────────────────────────
+        if choice == "R":
+            print()
+            print(_box_top())
+            print(_box_line(_cyan("  SELECCIONAR ROL")))
+            print(_box_mid())
+            print(_box_line(f"  {_yellow('[1]')} ADMIN      {_dim('(requiere token de invitacion)')}"))
+            print(_box_line(f"  {_yellow('[2]')} OPERATOR   {_dim('(registro libre)')}"))
+            print(_box_line(f"  {_yellow('[3]')} VIEWER     {_dim('(registro libre)')}"))
+            print(_box_bot())
+            print()
+            role_choice = _prompt("Rol", hint="1 / 2 / 3")
+
+            if role_choice == "1":
+                # ── ADMIN con invitation token ───────────────────
+                invitation_token = _prompt("invitation_token", hint="(proporcionado por un ADMIN)")
+                user_id = _prompt("user_id")
+                display_name = _prompt("display_name")
+                password = _prompt("password", hint="(min 4 caracteres)")
+                if not user_id or not display_name or len(password) < 4 or not invitation_token:
+                    print(_red("  Datos invalidos. Reinicia el terminal."))
+                    raise SystemExit(1)
+                result = ledger.create_user(
+                    user_id, display_name,
+                    password=password, role="ADMIN",
+                    invitation_token=invitation_token,
+                )
+                if isinstance(result, str) and result.startswith("Error"):
+                    _print_result_box("ERROR", "register", result)
+                    raise SystemExit(1)
+                store.save_ledger(ledger)
+                _print_result_box("SUCCESS", "register", f"Usuario ADMIN '{user_id}' creado. Ahora inicia sesion.")
+
+            elif role_choice in ("2", "3"):
+                selected_role = "OPERATOR" if role_choice == "2" else "VIEWER"
+                user_id = _prompt("user_id")
+                display_name = _prompt("display_name")
+                password = _prompt("password", hint="(min 4 caracteres)")
+                if not user_id or not display_name or len(password) < 4:
+                    print(_red("  Datos invalidos. Reinicia el terminal."))
+                    raise SystemExit(1)
+                result = ledger.create_user(
+                    user_id, display_name,
+                    password=password, role=selected_role,
+                )
+                if isinstance(result, str) and result.startswith("Error"):
+                    _print_result_box("ERROR", "register", result)
+                    raise SystemExit(1)
+                store.save_ledger(ledger)
+                # Mostrar activation_code en caja prominente
+                activation_code = result.get("activation_code", "") if isinstance(result, dict) else ""
+                print()
+                print(_box_top())
+                print(_box_line(_yellow("  CUENTA CREADA — CODIGO DE ACTIVACION")))
+                print(_box_mid())
+                print(_box_line(f"  Usuario:    {_bold(user_id)}"))
+                print(_box_line(f"  Rol:        {_bold(selected_role)}"))
+                print(_box_line(f"  Codigo:     {_green(_bold(str(activation_code)))}"))
+                print(_box_mid())
+                print(_box_line(_dim("  Guarda este codigo. Lo necesitaras para activar tu cuenta.")))
+                print(_box_bot())
+
+            else:
+                print(_red("  Opcion de rol invalida. Reinicia el terminal."))
+                raise SystemExit(1)
+
+        elif choice != "L":
+            print(_red("  Opcion invalida. Reinicia el terminal."))
+            raise SystemExit(1)
+
+    # ── 4. Login (siempre, despues de bootstrap o registro) ──────
     print()
     print(_box_top())
     print(_box_line(_cyan("  INICIAR SESION")))
@@ -611,16 +750,28 @@ def _auth_flow(store_file) -> SessionState:
     for attempt in range(3):
         user_id = _prompt("user_id")
         password = _prompt("password")
-        if not settings.jwt_secret:
-            print(_red("  JWT_SECRET no configurado en .env"))
-            raise SystemExit(1)
-        result = ledger.login(user_id, password, settings.jwt_secret, settings.jwt_ttl_seconds)
+
+        # Verificar si la cuenta necesita activacion
+        activation_code = None
+        if not ledger.is_account_activated(user_id):
+            activation_code = _prompt("activation_code", hint="(cuenta pendiente de activacion)")
+
+        result = ledger.login(
+            user_id, password, jwt_secret, jwt_ttl,
+            activation_code=activation_code,
+        )
         if isinstance(result, dict):
             session.auth_user_id = result["user_id"]
             session.auth_roles = result["roles"]
             session.jwt_token = result["access_token"]
-            _print_result_box("SUCCESS", "login", f"Bienvenido {user_id} [{', '.join(result['roles']) or 'sin roles'}]")
+            print()
+            print(_box_top())
+            print(_box_line(_green(f"  Bienvenido, {_bold(user_id)}")))
+            print(_box_mid())
+            print(_box_line(f"  {_dim('Roles:')}  {_bold(', '.join(result['roles']) or 'sin roles')}"))
+            print(_box_bot())
             return session
+
         _print_result_box("ERROR", "login", str(result))
         if attempt < 2:
             print(_dim(f"  Intentos restantes: {2 - attempt}"))
@@ -650,9 +801,11 @@ def main() -> None:
         "19": Permission.VIEW_RISK_PROFILES, "20": Permission.VIEW_ALERTS,
     }
 
+    user_menu = _get_menu_for_roles(session.auth_roles)
+
     while True:
         _print_pending_feedback(session)
-        _print_menu()
+        _print_menu(user_menu)
         print(_dim(f"  Usuario: {_bold(session.auth_user_id)} [{', '.join(session.auth_roles)}]"))
 
         option = input(f"\n  {_cyan('›')} {_bold('Opcion')}: ").strip()
@@ -899,6 +1052,27 @@ def main() -> None:
 
         elif option == "11":
             _print_dashboard(session)
+
+        elif option == "22":
+            _section_header("GENERAR TOKEN DE INVITACION ADMIN")
+            input_units = _measure_units("generate-admin-token")
+            started_at = time.perf_counter()
+            result = ledger.generate_admin_invitation(session.auth_user_id)
+            elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+            if isinstance(result, str) and result.startswith("Error"):
+                _print_result_box("ERROR", "generate-admin-token", result)
+                _apply_result_to_session(session, action="generate-admin-token", result=result, revision_id=None, is_error=True, elapsed_ms=elapsed_ms, input_units=input_units)
+                continue
+            rev = _persist(store, ledger)
+            _print_data_box("Token de invitacion generado", result, rev)
+            print()
+            print(_box_top())
+            print(_box_line(_yellow("  ⚡ IMPORTANTE: Comparte este token con el nuevo ADMIN")))
+            print(_box_mid())
+            print(_box_line(f"  Token: {_bold(result['token'])}"))
+            print(_box_line(_dim("  Este token es de un solo uso.")))
+            print(_box_bot())
+            _apply_result_to_session(session, action="generate-admin-token", result=result, revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units)
 
         elif option == "12":
             _section_header("LISTAR USUARIOS")
