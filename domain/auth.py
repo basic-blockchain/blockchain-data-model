@@ -100,6 +100,22 @@ def verify_password(plain: str, hashed: str) -> bool:
     return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
 
 
+# ── Invitation & Activation tokens ──────────────────────
+
+import secrets
+import string
+
+_ACTIVATION_ALPHABET = string.ascii_uppercase + string.digits
+
+
+def generate_invitation_token() -> str:
+    return secrets.token_hex(16)
+
+
+def generate_activation_code() -> str:
+    return "".join(secrets.choice(_ACTIVATION_ALPHABET) for _ in range(16))
+
+
 # ── JWT ──────────────────────────────────────────────────
 
 

@@ -70,6 +70,8 @@ class MultiUserWalletLedger:
         self.alerts: list[dict] = []
         self.user_credentials: dict[str, dict] = {}
         self.user_roles: dict[str, list[str]] = {}
+        self.admin_invitation_tokens: list[dict] = []
+        self.activation_codes: dict[str, dict] = {}
 
     RISK_PROFILE_DEFAULTS: dict[str, dict[str, str | None]] = {
         "STANDARD": {
@@ -217,11 +219,25 @@ class MultiUserWalletLedger:
     def is_empty(self) -> bool:
         return len(self.users) == 0
 
-    def create_user(self, user_id: str, display_name: str, password: str = "") -> str:
+    def create_user(self, user_id: str, display_name: str, password: str = "", role: str = "", invitation_token: str = "") -> dict | str:
         if not user_id or not display_name:
             return "Error: user_id y display_name son requeridos."
         if user_id in self.users:
             return f"Aviso: el usuario {user_id} ya existe."
+
+        from domain.auth import Role, hash_password, generate_activation_code
+
+        role = role.upper() if role else ""
+        valid_roles = {r.value for r in Role}
+
+        if role == "ADMIN":
+            if not invitation_token:
+                return "Error: se requiere un token de invitacion para crear usuario ADMIN."
+            if not self.validate_admin_invitation(invitation_token):
+                return "Error: token de invitacion invalido o ya utilizado."
+
+        if role and role not in valid_roles:
+            return f"Error: role invalido. Opciones: {', '.join(sorted(valid_roles))}."
 
         self.users[user_id] = UserRecord(
             user_id=user_id,
@@ -231,10 +247,9 @@ class MultiUserWalletLedger:
         self.user_wallets[user_id] = []
         self.user_policies[user_id] = self._new_user_policy(user_id)
         self.user_risk_profiles[user_id] = self._new_user_risk_profile(user_id)
-        self.user_roles[user_id] = []
+        self.user_roles[user_id] = [role] if role else []
 
         if password:
-            from domain.auth import hash_password
             now = self._timestamp()
             self.user_credentials[user_id] = {
                 "user_id": user_id,
@@ -243,7 +258,64 @@ class MultiUserWalletLedger:
                 "updated_at": now,
             }
 
-        return f"Usuario {user_id} creado."
+        if not role:
+            return f"Usuario {user_id} creado."
+
+        result: dict = {"message": f"Usuario {user_id} creado.", "user_id": user_id, "role": role}
+
+        if role in ("OPERATOR", "VIEWER"):
+            code = generate_activation_code()
+            self.activation_codes[user_id] = {
+                "user_id": user_id,
+                "code": code,
+                "activated": False,
+                "created_at": self._timestamp(),
+            }
+            result["activation_code"] = code
+            result["activation_notice"] = "Guarda este codigo. Lo necesitaras en tu primer inicio de sesion."
+
+        if role == "ADMIN":
+            result["activation_notice"] = "Cuenta ADMIN creada. Inicia sesion con tu password."
+
+        return result
+
+    def generate_admin_invitation(self, created_by_user_id: str) -> dict | str:
+        if created_by_user_id not in self.users:
+            return f"Error: usuario {created_by_user_id} no existe."
+        from domain.auth import generate_invitation_token
+        token = generate_invitation_token()
+        self.admin_invitation_tokens.append({
+            "token": token,
+            "created_by": created_by_user_id,
+            "created_at": self._timestamp(),
+            "used": False,
+            "used_by": "",
+        })
+        return {"token": token, "created_by": created_by_user_id}
+
+    def validate_admin_invitation(self, token: str) -> bool:
+        for inv in self.admin_invitation_tokens:
+            if inv["token"] == token and not inv["used"]:
+                inv["used"] = True
+                return True
+        return False
+
+    def is_account_activated(self, user_id: str) -> bool:
+        ac = self.activation_codes.get(user_id)
+        if ac is None:
+            return True
+        return bool(ac.get("activated", False))
+
+    def activate_account(self, user_id: str, code: str) -> str:
+        ac = self.activation_codes.get(user_id)
+        if ac is None:
+            return "Error: usuario no tiene codigo de activacion pendiente."
+        if ac["activated"]:
+            return "Aviso: cuenta ya activada."
+        if ac["code"] != code:
+            return "Error: codigo de activacion incorrecto."
+        ac["activated"] = True
+        return f"Cuenta {user_id} activada exitosamente."
 
     def set_user_password(self, user_id: str, password: str) -> str:
         if user_id not in self.users:
@@ -267,9 +339,15 @@ class MultiUserWalletLedger:
         from domain.auth import verify_password
         return verify_password(password, cred["password_hash"])
 
-    def login(self, user_id: str, password: str, jwt_secret: str, jwt_ttl: int = 3600) -> dict | str:
+    def login(self, user_id: str, password: str, jwt_secret: str, jwt_ttl: int = 3600, activation_code: str = "") -> dict | str:
         if not self.authenticate(user_id, password):
             return "Error: credenciales invalidas."
+        if not self.is_account_activated(user_id):
+            if not activation_code:
+                return "Error: cuenta no activada. Se requiere codigo de activacion para el primer inicio de sesion."
+            activate_result = self.activate_account(user_id, activation_code)
+            if activate_result.startswith("Error"):
+                return activate_result
         from domain.auth import create_jwt
         roles = self.user_roles.get(user_id, [])
         token = create_jwt(user_id, roles, jwt_secret, jwt_ttl)
@@ -974,6 +1052,8 @@ class MultiUserWalletLedger:
                 for uid, roles in self.user_roles.items()
                 for role in roles
             ],
+            "admin_invitation_tokens": list(self.admin_invitation_tokens),
+            "activation_codes": list(self.activation_codes.values()),
         }
 
     @classmethod
@@ -1169,5 +1249,17 @@ class MultiUserWalletLedger:
         for uid in ledger.users:
             if uid not in ledger.user_roles:
                 ledger.user_roles[uid] = []
+
+        ledger.admin_invitation_tokens = list(snapshot.get("admin_invitation_tokens", []))
+
+        for ac in snapshot.get("activation_codes", []):
+            uid = str(ac.get("user_id", "")).strip()
+            if uid:
+                ledger.activation_codes[uid] = {
+                    "user_id": uid,
+                    "code": str(ac.get("code", "")),
+                    "activated": bool(ac.get("activated", False)),
+                    "created_at": str(ac.get("created_at", cls._timestamp())),
+                }
 
         return ledger
