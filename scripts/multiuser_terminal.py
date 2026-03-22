@@ -840,12 +840,36 @@ def main() -> None:
             _section_header("CREAR USUARIO")
             user_id = _prompt("user_id")
             display_name = _prompt("display_name")
-            input_units = _measure_units(user_id, display_name)
+            password = _prompt("password", hint="(min 4 caracteres, vacio=sin password)")
+            role = _prompt("role", hint="ADMIN / OPERATOR / VIEWER", default="VIEWER").upper()
+            if role not in ("ADMIN", "OPERATOR", "VIEWER"):
+                _print_result_box("ERROR", "create-user", f"Rol invalido: {role}")
+                continue
+            invitation_token = ""
+            if role == "ADMIN":
+                invitation_token = _prompt("invitation_token", hint="(requerido para ADMIN)")
+            input_units = _measure_units(user_id, display_name, role)
             started_at = time.perf_counter()
-            result = ledger.create_user(user_id, display_name)
+            result = ledger.create_user(user_id, display_name, password=password, role=role, invitation_token=invitation_token)
+            if isinstance(result, str) and result.startswith("Error"):
+                elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+                _print_result_box("ERROR", "create-user", result)
+                _apply_result_to_session(
+                    session, action="create-user", result=result,
+                    revision_id=None, is_error=True, elapsed_ms=elapsed_ms, input_units=input_units,
+                )
+                continue
             rev = _persist(store, ledger)
             elapsed_ms = (time.perf_counter() - started_at) * 1000.0
             _print_data_box("Usuario creado", result if isinstance(result, dict) else {"resultado": result}, rev)
+            if isinstance(result, dict) and result.get("activation_code"):
+                print()
+                print(_box_top())
+                print(_box_line(_yellow("  CODIGO DE ACTIVACION")))
+                print(_box_mid())
+                print(_box_line(f"  Codigo: {_bold(result['activation_code'])}"))
+                print(_box_line(_dim("  El usuario necesita este codigo en su primer login.")))
+                print(_box_bot())
             _apply_result_to_session(
                 session, action="create-user", result=result,
                 revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
