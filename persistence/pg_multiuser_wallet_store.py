@@ -51,6 +51,8 @@ class PgMultiUserWalletStore(WalletLedgerRepository):
                     self._sync_invitation_tokens(cur, snapshot.get("admin_invitation_tokens", []))
                 if self._table_exists(cur, "activation_codes"):
                     self._sync_activation_codes(cur, snapshot.get("activation_codes", []))
+                if self._table_exists(cur, "exchange_rates"):
+                    self._sync_exchange_rates(cur, snapshot.get("exchange_rates", []))
                 self._insert_revision(cur, revision_id, snapshot)
 
         return revision_id
@@ -116,6 +118,10 @@ class PgMultiUserWalletStore(WalletLedgerRepository):
                     activation_codes = self._fetch_activation_codes(cur)
                 else:
                     activation_codes = []
+                if self._table_exists(cur, "exchange_rates"):
+                    exchange_rates = self._fetch_exchange_rates(cur)
+                else:
+                    exchange_rates = []
 
         return {
             "users": users,
@@ -129,6 +135,7 @@ class PgMultiUserWalletStore(WalletLedgerRepository):
             "roles": roles,
             "admin_invitation_tokens": invitation_tokens,
             "activation_codes": activation_codes,
+            "exchange_rates": exchange_rates,
         }
 
     def _fetch_users(self, cur) -> list[dict]:
@@ -216,16 +223,30 @@ class PgMultiUserWalletStore(WalletLedgerRepository):
         ]
 
     def _fetch_transfers(self, cur) -> list[dict]:
-        cur.execute(
-            """
-            SELECT transfer_id, type, sender_wallet, receiver_wallet,
-                   amount, fee, nonce, previous_hash, tx_hash,
-                   reference, status, created_at
-            FROM transfers ORDER BY created_at
-            """
-        )
-        return [
-            {
+        has_exchange_cols = self._column_exists(cur, "transfers", "sender_currency")
+        if has_exchange_cols:
+            cur.execute(
+                """
+                SELECT transfer_id, type, sender_wallet, receiver_wallet,
+                       amount, fee, nonce, previous_hash, tx_hash,
+                       reference, status, created_at,
+                       sender_currency, receiver_currency,
+                       exchange_rate, exchange_commission, converted_amount
+                FROM transfers ORDER BY created_at
+                """
+            )
+        else:
+            cur.execute(
+                """
+                SELECT transfer_id, type, sender_wallet, receiver_wallet,
+                       amount, fee, nonce, previous_hash, tx_hash,
+                       reference, status, created_at
+                FROM transfers ORDER BY created_at
+                """
+            )
+        results = []
+        for r in cur.fetchall():
+            rec = {
                 "transfer_id": r[0],
                 "type": r[1],
                 "sender_wallet": r[2] or "",
@@ -239,8 +260,19 @@ class PgMultiUserWalletStore(WalletLedgerRepository):
                 "status": r[10],
                 "created_at": r[11].isoformat() if r[11] else "",
             }
-            for r in cur.fetchall()
-        ]
+            if has_exchange_cols:
+                if r[12]:
+                    rec["sender_currency"] = r[12]
+                if r[13]:
+                    rec["receiver_currency"] = r[13]
+                if r[14] is not None:
+                    rec["exchange_rate"] = str(r[14])
+                if r[15] is not None:
+                    rec["exchange_commission"] = str(r[15])
+                if r[16] is not None:
+                    rec["converted_amount"] = str(r[16])
+            results.append(rec)
+        return results
 
     def _fetch_alerts(self, cur) -> list[dict]:
         cur.execute(
@@ -383,26 +415,56 @@ class PgMultiUserWalletStore(WalletLedgerRepository):
 
     def _sync_transfers(self, cur, transfers: list[dict]) -> None:
         cur.execute("DELETE FROM transfers")
+        has_exchange_cols = self._column_exists(cur, "transfers", "sender_currency")
         for t in transfers:
-            cur.execute(
-                """
-                INSERT INTO transfers
-                    (transfer_id, type, sender_wallet, receiver_wallet,
-                     amount, fee, nonce, previous_hash, tx_hash,
-                     reference, status, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """,
-                (
-                    t["transfer_id"], t["type"],
-                    t.get("sender_wallet") or None,
-                    t["receiver_wallet"],
-                    t["amount"], t["fee"], t.get("nonce"),
-                    t.get("previous_hash") or None,
-                    t.get("tx_hash") or None,
-                    t.get("reference", ""), t.get("status", "SETTLED"),
-                    t.get("created_at"),
-                ),
-            )
+            if has_exchange_cols:
+                cur.execute(
+                    """
+                    INSERT INTO transfers
+                        (transfer_id, type, sender_wallet, receiver_wallet,
+                         amount, fee, nonce, previous_hash, tx_hash,
+                         reference, status, created_at,
+                         sender_currency, receiver_currency,
+                         exchange_rate, exchange_commission, converted_amount)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                            %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        t["transfer_id"], t["type"],
+                        t.get("sender_wallet") or None,
+                        t["receiver_wallet"],
+                        t["amount"], t["fee"], t.get("nonce"),
+                        t.get("previous_hash") or None,
+                        t.get("tx_hash") or None,
+                        t.get("reference", ""), t.get("status", "SETTLED"),
+                        t.get("created_at"),
+                        t.get("sender_currency"),
+                        t.get("receiver_currency"),
+                        t.get("exchange_rate"),
+                        t.get("exchange_commission"),
+                        t.get("converted_amount"),
+                    ),
+                )
+            else:
+                cur.execute(
+                    """
+                    INSERT INTO transfers
+                        (transfer_id, type, sender_wallet, receiver_wallet,
+                         amount, fee, nonce, previous_hash, tx_hash,
+                         reference, status, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        t["transfer_id"], t["type"],
+                        t.get("sender_wallet") or None,
+                        t["receiver_wallet"],
+                        t["amount"], t["fee"], t.get("nonce"),
+                        t.get("previous_hash") or None,
+                        t.get("tx_hash") or None,
+                        t.get("reference", ""), t.get("status", "SETTLED"),
+                        t.get("created_at"),
+                    ),
+                )
 
     def _sync_alerts(self, cur, alerts: list[dict]) -> None:
         cur.execute("DELETE FROM alerts")
@@ -468,6 +530,36 @@ class PgMultiUserWalletStore(WalletLedgerRepository):
                 (t["token"], t["created_by"], t.get("created_at"), t.get("used", False), t.get("used_by", "") or None),
             )
 
+    def _fetch_exchange_rates(self, cur) -> list[dict]:
+        cur.execute(
+            "SELECT pair_id, from_currency, to_currency, rate, commission_pct, updated_at FROM exchange_rates"
+        )
+        return [
+            {
+                "pair_id": r[0],
+                "from_currency": r[1],
+                "to_currency": r[2],
+                "rate": str(r[3]),
+                "commission_pct": str(r[4]),
+                "updated_at": r[5].isoformat() if r[5] else "",
+            }
+            for r in cur.fetchall()
+        ]
+
+    def _sync_exchange_rates(self, cur, rates: list[dict]) -> None:
+        cur.execute("DELETE FROM exchange_rates")
+        for er in rates:
+            cur.execute(
+                """
+                INSERT INTO exchange_rates (pair_id, from_currency, to_currency, rate, commission_pct, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    er["pair_id"], er["from_currency"], er["to_currency"],
+                    er["rate"], er["commission_pct"], er.get("updated_at"),
+                ),
+            )
+
     def _sync_activation_codes(self, cur, codes: list[dict]) -> None:
         cur.execute("DELETE FROM activation_codes")
         for c in codes:
@@ -501,3 +593,11 @@ class PgMultiUserWalletStore(WalletLedgerRepository):
     def _table_exists(cur, table_name: str) -> bool:
         cur.execute("SELECT to_regclass(%s)", (table_name,))
         return cur.fetchone()[0] is not None
+
+    @staticmethod
+    def _column_exists(cur, table_name: str, column_name: str) -> bool:
+        cur.execute(
+            "SELECT 1 FROM information_schema.columns WHERE table_name = %s AND column_name = %s",
+            (table_name, column_name),
+        )
+        return cur.fetchone() is not None
