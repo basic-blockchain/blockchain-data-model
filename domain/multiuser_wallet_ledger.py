@@ -56,7 +56,7 @@ class UserRiskProfileRecord:
 
 
 class MultiUserWalletLedger:
-    TOKEN_TTL_SECONDS = 120
+    TOKEN_TTL_SECONDS = 300  # 5 minutes for wallet transfer tokens
 
     def __init__(self):
         self.users: dict[str, UserRecord] = {}

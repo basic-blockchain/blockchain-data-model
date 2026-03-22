@@ -692,6 +692,7 @@ def _auth_flow(store_file) -> SessionState:
                 if not user_id or not display_name or len(password) < 4 or not invitation_token:
                     print(_red("  Datos invalidos. Reinicia el terminal."))
                     raise SystemExit(1)
+                store, ledger = _load(store_file)
                 result = ledger.create_user(
                     user_id, display_name,
                     password=password, role="ADMIN",
@@ -711,6 +712,7 @@ def _auth_flow(store_file) -> SessionState:
                 if not user_id or not display_name or len(password) < 4:
                     print(_red("  Datos invalidos. Reinicia el terminal."))
                     raise SystemExit(1)
+                store, ledger = _load(store_file)
                 result = ledger.create_user(
                     user_id, display_name,
                     password=password, role=selected_role,

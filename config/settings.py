@@ -69,6 +69,6 @@ def get_settings() -> Settings:
         pg_pool_min=int(os.environ.get("PG_POOL_MIN", "1")),
         pg_pool_max=int(os.environ.get("PG_POOL_MAX", "5")),
         jwt_secret=_ensure_jwt_secret(),
-        jwt_ttl_seconds=int(os.environ.get("JWT_TTL_SECONDS", "3600")),
+        jwt_ttl_seconds=int(os.environ.get("JWT_TTL_SECONDS", "1800")),
         bcrypt_rounds=int(os.environ.get("BCRYPT_ROUNDS", "12")),
     )
