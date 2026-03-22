@@ -1644,42 +1644,91 @@ def _cmd_reset_role_permissions(ctx: CommandContext) -> None:
 
 def _cmd_freeze_wallet(ctx: CommandContext) -> None:
     _section_header("CONGELAR WALLET")
-    wallet_id = _prompt("wallet_id")
-    input_units = _measure_units(wallet_id)
-    started_at = time.perf_counter()
-    result = ctx.ledger.freeze_wallet(wallet_id)
-    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
-    if isinstance(result, str) and result.startswith("Error"):
-        _print_result_box("ERROR", "freeze-wallet", result)
-        _execute_and_track(ctx, action="freeze-wallet", result=result, revision_id=None, is_error=True, elapsed_ms=elapsed_ms, input_units=input_units)
-        raise _SkipCommand
-    rev = _persist(ctx.store, ctx.ledger)
-    _print_data_box("Wallet congelada", result if isinstance(result, dict) else {"resultado": result}, rev)
-    _execute_and_track(ctx, action="freeze-wallet", result=result, revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units)
+    print()
+    print(_box_top())
+    print(_box_line(_cyan("  Modo de congelamiento:")))
+    print(_box_mid())
+    print(_box_line(f"  {_yellow('[1]')} Por usuario   {_dim('(congela TODAS las wallets del usuario)')}"))
+    print(_box_line(f"  {_yellow('[2]')} Por wallet    {_dim('(congela una wallet especifica)')}"))
+    print(_box_bot())
+    mode = _prompt("Modo", hint="1 / 2")
+    if mode == "1":
+        user_id = _prompt("user_id")
+        input_units = _measure_units(user_id)
+        wallet_ids = ctx.ledger.user_wallets.get(user_id, [])
+        if not wallet_ids:
+            _print_result_box("ERROR", "freeze-wallet", f"Usuario {user_id} no tiene wallets.")
+            raise _SkipCommand
+        started_at = time.perf_counter()
+        frozen = []
+        for wid in wallet_ids:
+            ctx.ledger.freeze_wallet(wid)
+            frozen.append(wid)
+        elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+        rev = _persist(ctx.store, ctx.ledger)
+        result = {"user_id": user_id, "frozen_wallets": frozen, "message": f"{len(frozen)} wallet(s) congelada(s)."}
+        _print_data_box("Wallets congeladas", result, rev)
+        _execute_and_track(ctx, action="freeze-wallet", result=result, revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units)
+    else:
+        wallet_id = _prompt("wallet_id")
+        input_units = _measure_units(wallet_id)
+        started_at = time.perf_counter()
+        result = ctx.ledger.freeze_wallet(wallet_id)
+        elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+        if isinstance(result, str) and result.startswith("Error"):
+            _print_result_box("ERROR", "freeze-wallet", result)
+            _execute_and_track(ctx, action="freeze-wallet", result=result, revision_id=None, is_error=True, elapsed_ms=elapsed_ms, input_units=input_units)
+            raise _SkipCommand
+        rev = _persist(ctx.store, ctx.ledger)
+        _print_data_box("Wallet congelada", result if isinstance(result, dict) else {"resultado": result}, rev)
+        _execute_and_track(ctx, action="freeze-wallet", result=result, revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units)
 
 
 def _cmd_unfreeze_wallet(ctx: CommandContext) -> None:
     _section_header("DESCONGELAR WALLET")
-    wallet_id = _prompt("wallet_id")
-    input_units = _measure_units(wallet_id)
-    started_at = time.perf_counter()
-    result = ctx.ledger.unfreeze_wallet(wallet_id)
-    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
-    if isinstance(result, str) and result.startswith("Error"):
-        _print_result_box("ERROR", "unfreeze-wallet", result)
-        _execute_and_track(ctx, action="unfreeze-wallet", result=result, revision_id=None, is_error=True, elapsed_ms=elapsed_ms, input_units=input_units)
-        raise _SkipCommand
-    rev = _persist(ctx.store, ctx.ledger)
-    _print_data_box("Wallet descongelada", result if isinstance(result, dict) else {"resultado": result}, rev)
-    _execute_and_track(ctx, action="unfreeze-wallet", result=result, revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units)
+    print()
+    print(_box_top())
+    print(_box_line(_cyan("  Modo de descongelamiento:")))
+    print(_box_mid())
+    print(_box_line(f"  {_yellow('[1]')} Por usuario   {_dim('(descongela TODAS las wallets del usuario)')}"))
+    print(_box_line(f"  {_yellow('[2]')} Por wallet    {_dim('(descongela una wallet especifica)')}"))
+    print(_box_bot())
+    mode = _prompt("Modo", hint="1 / 2")
+    if mode == "1":
+        user_id = _prompt("user_id")
+        input_units = _measure_units(user_id)
+        wallet_ids = ctx.ledger.user_wallets.get(user_id, [])
+        if not wallet_ids:
+            _print_result_box("ERROR", "unfreeze-wallet", f"Usuario {user_id} no tiene wallets.")
+            raise _SkipCommand
+        started_at = time.perf_counter()
+        unfrozen = []
+        for wid in wallet_ids:
+            ctx.ledger.unfreeze_wallet(wid)
+            unfrozen.append(wid)
+        elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+        rev = _persist(ctx.store, ctx.ledger)
+        result = {"user_id": user_id, "unfrozen_wallets": unfrozen, "message": f"{len(unfrozen)} wallet(s) descongelada(s)."}
+        _print_data_box("Wallets descongeladas", result, rev)
+        _execute_and_track(ctx, action="unfreeze-wallet", result=result, revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units)
+    else:
+        wallet_id = _prompt("wallet_id")
+        input_units = _measure_units(wallet_id)
+        started_at = time.perf_counter()
+        result = ctx.ledger.unfreeze_wallet(wallet_id)
+        elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+        if isinstance(result, str) and result.startswith("Error"):
+            _print_result_box("ERROR", "unfreeze-wallet", result)
+            _execute_and_track(ctx, action="unfreeze-wallet", result=result, revision_id=None, is_error=True, elapsed_ms=elapsed_ms, input_units=input_units)
+            raise _SkipCommand
+        rev = _persist(ctx.store, ctx.ledger)
+        _print_data_box("Wallet descongelada", result if isinstance(result, dict) else {"resultado": result}, rev)
+        _execute_and_track(ctx, action="unfreeze-wallet", result=result, revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units)
 
 
 def _cmd_ban_user(ctx: CommandContext) -> None:
     _section_header("BANEAR USUARIO")
     user_id = _prompt("user_id")
-    if not _prompt_confirm(f"Banear usuario {user_id} y congelar todas sus wallets?"):
-        _print_result_box("SUCCESS", "ban-user", "Cancelado por el usuario.")
-        raise _SkipCommand
     input_units = _measure_units(user_id)
     started_at = time.perf_counter()
     result = ctx.ledger.ban_user(user_id)
