@@ -637,18 +637,7 @@ def _auth_flow(store_file) -> SessionState:
     jwt_ttl = settings.jwt_ttl_seconds
 
     if not jwt_secret:
-        import secrets as _secrets
-        generated = _secrets.token_hex(32)
-        print()
-        print(_box_top())
-        print(_box_line(_red("  JWT_SECRET no configurado")))
-        print(_box_mid())
-        print(_box_line(_dim("  Agrega esta linea a tu archivo .env:")))
-        print(_box_line(f"  JWT_SECRET={generated}"))
-        print(_box_mid())
-        print(_box_line(_dim("  O ejecuta:")))
-        print(_box_line(f"  echo 'JWT_SECRET={generated}' >> .env"))
-        print(_box_bot())
+        print(_red("  Error critico: JWT_SECRET no disponible."))
         raise SystemExit(1)
 
     # ── 1. Bootstrap: ledger vacio → crear primer ADMIN ──────────

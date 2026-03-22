@@ -44,6 +44,23 @@ class Settings:
     bcrypt_rounds: int
 
 
+def _ensure_jwt_secret() -> str:
+    """Return JWT_SECRET from env, generating and persisting one if missing."""
+    secret = os.environ.get("JWT_SECRET", "")
+    if secret:
+        return secret
+    import secrets
+    secret = secrets.token_hex(32)
+    os.environ["JWT_SECRET"] = secret
+    env_path = Path(__file__).resolve().parents[1] / ".env"
+    try:
+        with open(env_path, "a", encoding="utf-8") as f:
+            f.write(f"\nJWT_SECRET={secret}\n")
+    except OSError:
+        pass
+    return secret
+
+
 def get_settings() -> Settings:
     _load_dotenv()
     return Settings(
@@ -51,7 +68,7 @@ def get_settings() -> Settings:
         pg_dsn=os.environ.get("DATABASE_URL", ""),
         pg_pool_min=int(os.environ.get("PG_POOL_MIN", "1")),
         pg_pool_max=int(os.environ.get("PG_POOL_MAX", "5")),
-        jwt_secret=os.environ.get("JWT_SECRET", ""),
+        jwt_secret=_ensure_jwt_secret(),
         jwt_ttl_seconds=int(os.environ.get("JWT_TTL_SECONDS", "3600")),
         bcrypt_rounds=int(os.environ.get("BCRYPT_ROUNDS", "12")),
     )
