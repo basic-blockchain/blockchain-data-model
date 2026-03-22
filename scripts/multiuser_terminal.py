@@ -173,6 +173,10 @@ ADMIN_MENU = [
         ("8", "snapshot", "Exportar estado completo del ledger"),
         ("21", "list-revisions", "Historial de revisiones del ledger"),
     ]),
+    ("EXCHANGE", [
+        ("23", "set-exchange-rate", "Configurar tasa de conversion"),
+        ("24", "list-exchange-rates", "Ver tasas de conversion"),
+    ]),
     ("SISTEMA", [
         ("22", "generate-admin-token", "Generar token de invitacion ADMIN"),
         ("11", "dashboard", "Metricas de sesion y rendimiento"),
@@ -190,6 +194,9 @@ OPERATOR_MENU = [
         ("3", "mint", "Emitir tokens"),
         ("4", "transfer", "Transferir fondos"),
         ("10", "transfer-wizard", "Asistente de transferencia"),
+    ]),
+    ("EXCHANGE", [
+        ("24", "list-exchange-rates", "Ver tasas de conversion"),
     ]),
     ("CONSULTAS", [
         ("5", "list-wallets", "Listar mis wallets"),
@@ -211,6 +218,9 @@ VIEWER_MENU = [
     ("TRANSACCIONES", [
         ("4", "transfer", "Transferir fondos"),
         ("10", "transfer-wizard", "Asistente de transferencia"),
+    ]),
+    ("EXCHANGE", [
+        ("24", "list-exchange-rates", "Ver tasas de conversion"),
     ]),
     ("CONSULTAS", [
         ("5", "list-wallets", "Listar mis wallets"),
@@ -516,6 +526,26 @@ def _run_transfer_wizard(ledger, session: SessionState):
         return amount_error, True, _measure_units(from_wallet, to_wallet, amount, fee, sender_token, expected_nonce)
     if fee_error:
         return fee_error, True, _measure_units(from_wallet, to_wallet, amount, fee, sender_token, expected_nonce)
+
+    # ── Exchange preview if cross-currency ──
+    sender_w = ledger.wallets.get(from_wallet)
+    receiver_w = ledger.wallets.get(to_wallet)
+    if sender_w and receiver_w and sender_w.currency != receiver_w.currency:
+        rate_info = ledger.get_exchange_rate(sender_w.currency, receiver_w.currency)
+        if rate_info:
+            from domain.exchange import convert_amount as _convert
+            from domain.multiuser_wallet_ledger import normalize_amount
+            conv = _convert(normalize_amount(amount), normalize_amount(rate_info["rate"]), Decimal(str(rate_info["commission_pct"])))
+            print()
+            print(_box_top())
+            print(_box_line(_yellow("  CONVERSION DE MONEDA")))
+            print(_box_mid())
+            print(_box_line(f"  {_dim('Origen:')}       {amount} {sender_w.currency}"))
+            print(_box_line(f"  {_dim('Tasa:')}         1 {sender_w.currency} = {rate_info['rate']} {receiver_w.currency}"))
+            print(_box_line(f"  {_dim('Bruto:')}        {conv['gross_amount']} {receiver_w.currency}"))
+            print(_box_line(f"  {_dim('Comision:')}     {conv['commission']} {receiver_w.currency} ({rate_info['commission_pct']}%)"))
+            print(_box_line(f"  {_dim('Destino:')}      {conv['net_amount']} {receiver_w.currency}"))
+            print(_box_bot())
 
     print()
     print(_box_top())
@@ -1342,6 +1372,60 @@ def _cmd_generate_admin_token(ctx: CommandContext) -> None:
     _execute_and_track(ctx, action="generate-admin-token", result=result, revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units)
 
 
+# ── Exchange handlers ────────────────────────────────────
+
+def _cmd_set_exchange_rate(ctx: CommandContext) -> None:
+    _section_header("CONFIGURAR TASA DE CONVERSION")
+    from_currency = _prompt("from_currency", hint="ej: BTC").upper()
+    to_currency = _prompt("to_currency", hint="ej: SOL").upper()
+    rate = _prompt("rate", hint="ej: 150.0")
+    commission_pct = _prompt("commission_pct", hint="porcentaje", default="1.0")
+    input_units = _measure_units(from_currency, to_currency, rate, commission_pct)
+    rate_error = _validate_numeric(rate, "rate")
+    comm_error = _validate_numeric(commission_pct, "commission_pct")
+    for err in (rate_error, comm_error):
+        if err:
+            _print_result_box("ERROR", "set-exchange-rate", err)
+            _execute_and_track(
+                ctx, action="set-exchange-rate", result=err,
+                revision_id=None, is_error=True, elapsed_ms=0.0, input_units=input_units,
+            )
+            raise _SkipCommand
+    started_at = time.perf_counter()
+    result = ctx.ledger.set_exchange_rate(from_currency, to_currency, rate, commission_pct=commission_pct)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    if isinstance(result, str) and result.startswith("Error"):
+        _print_result_box("ERROR", "set-exchange-rate", result)
+        _execute_and_track(
+            ctx, action="set-exchange-rate", result=result,
+            revision_id=None, is_error=True, elapsed_ms=elapsed_ms, input_units=input_units,
+        )
+        raise _SkipCommand
+    rev = _persist(ctx.store, ctx.ledger)
+    elapsed_ms += (time.perf_counter() - started_at) * 1000.0
+    _print_data_box("Tasa configurada", result if isinstance(result, dict) else {"resultado": result}, rev)
+    _execute_and_track(
+        ctx, action="set-exchange-rate", result=result,
+        revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
+    )
+
+
+def _cmd_list_exchange_rates(ctx: CommandContext) -> None:
+    _section_header("TASAS DE CONVERSION")
+    input_units = _measure_units("list-exchange-rates")
+    started_at = time.perf_counter()
+    result = ctx.ledger.list_exchange_rates()
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    if not result:
+        _print_result_box("SUCCESS", "list-exchange-rates", "No hay tasas configuradas.")
+    else:
+        _print_data_box(f"Tasas de conversion ({len(result)})", result)
+    _execute_and_track(
+        ctx, action="list-exchange-rates", result=result,
+        revision_id=None, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
+    )
+
+
 # ── Command handler registry ────────────────────────────
 
 from typing import Callable
@@ -1370,6 +1454,8 @@ COMMAND_HANDLERS: dict[str, tuple[Callable, str | None]] = {
     "20": (_cmd_list_alerts,          Permission.VIEW_ALERTS),
     "21": (_cmd_list_revisions,       Permission.VIEW_REVISIONS),
     "22": (_cmd_generate_admin_token, None),
+    "23": (_cmd_set_exchange_rate,    Permission.SET_EXCHANGE_RATE),
+    "24": (_cmd_list_exchange_rates,  None),
 }
 
 
