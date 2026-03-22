@@ -1,7 +1,7 @@
 # Blockchain Data Model MVP
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![SemVer](https://img.shields.io/badge/semver-2.3.0-3D7EA6)](https://semver.org/)
+[![SemVer](https://img.shields.io/badge/semver-2.4.0-3D7EA6)](https://semver.org/)
 [![Docs](https://img.shields.io/badge/docs-available-1F6FEB)](docs/MODEL_SIMULATION_GUIDE.md)
 
 MVP for comparing two blockchain data models in Python:
@@ -11,8 +11,8 @@ MVP for comparing two blockchain data models in Python:
 The project includes realistic simulation scenarios, JSON persistence per model, compliance/traceability events, and basic observability metrics.
 
 Current release line:
-- Latest stable release: `v2.3.0`
-- Next target: `v2.4.0`
+- Latest stable release: `v2.4.0`
+- Next target: `v2.5.0`
 
 ## Quick Start
 
