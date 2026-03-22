@@ -45,12 +45,23 @@ Multi-user wallet flow (new iteration):
 
 ```bash
 py scripts/multiuser_wallet_cli.py create-user --user-id u-alice --display-name "Alice"
-py scripts/multiuser_wallet_cli.py create-wallet --user-id u-alice --wallet-id w-alice
-py scripts/multiuser_wallet_cli.py mint --wallet-id w-alice --amount 100
+py scripts/multiuser_wallet_cli.py create-wallet --user-id u-alice --wallet-id wallet_user_alpha_01 --model UTXO
+py scripts/multiuser_wallet_cli.py mint --wallet-id wallet_user_alpha_01 --amount 100
 py scripts/multiuser_wallet_cli.py set-risk-profile --user-id u-alice --profile-name HIGH --transfer-alert-threshold 5 --daily-alert-threshold 20
 py scripts/multiuser_wallet_cli.py snapshot --json
 py scripts/multiuser_wallet_cli.py list-alerts --user-id u-alice --json
 ```
+
+## Estado actual de autenticacion y roles (v2.4.0)
+
+La version actual incluye autenticacion y RBAC en la capa de dominio y persistencia:
+- Password hashing con bcrypt.
+- JWT con claims de usuario y roles.
+- Roles: ADMIN, OPERATOR, VIEWER.
+
+Importante para operacion diaria:
+- El CLI y el terminal interactivo exponen hoy el flujo operativo de wallets/tokens de wallet (sender-token + nonce).
+- Los metodos de login y asignacion de roles ya existen en dominio, pero no estan expuestos aun como comandos dedicados en `multiuser_wallet_cli.py` ni como opciones del menu interactivo.
 
 Run tests:
 
@@ -70,19 +81,25 @@ Use either Git Bash or PowerShell, but always run commands from repository root.
 # 1) Move to repository root
 cd /c/Users/User/Documents/sapir/blockchain_usb/scripts/python/blockchain-data-model
 
-# 2) Verify Python launcher is available
+# 2) Sync local develop with origin/develop
+git checkout develop
+git pull --ff-only origin develop
+
+# 3) Verify Python launcher is available
 py --version
 
-# 3) (Optional) reset persisted data before a fresh run
+# 4) (Optional) reset persisted data before a fresh run
 bash scripts/reset_persistence_json.sh
 
-# 4) Quick health check for CLI availability
+# 5) Quick health check for CLI availability
 py scripts/multiuser_wallet_cli.py --help
 ```
 
 If `py` is not available in your shell, open a terminal profile where Python Launcher is configured.
 
 ### Normal mode (CLI)
+
+Paso a paso operativo (flujo recomendado):
 
 ```bash
 # 0) Optional: validate key multiuser tests
@@ -120,7 +137,9 @@ bash scripts/devsecops_check_content_sync.sh
 ```
 
 Notes:
+- Wallet IDs manuales deben tener 20-30 caracteres (`[A-Za-z0-9_-]`). Si no se envia `--wallet-id`, se genera automaticamente uno valido.
 - Copy `auth_token` from wallet creation output and use it as `--sender-token`.
+- Use `--expected-nonce` para evitar replay/orden incorrecto de transferencias.
 - If transfer returns token expiration/mismatch, call `refresh-token` and retry with the new token.
 
 ### Interactive terminal mode
@@ -129,17 +148,24 @@ Notes:
 py scripts/multiuser_terminal.py
 ```
 
-Recommended menu sequence:
+Recommended menu sequence (v2.4.0):
 - `1) create-user` (Alice)
 - `1) create-user` (Bob)
 - `2) create-wallet` (Alice, model `UTXO`)
 - `2) create-wallet` (Bob, model `UTXO`)
 - `3) mint` (Alice)
 - `4) transfer` (use Alice token + expected nonce)
+- `10) transfer-wizard` (guided transfer with confirm step)
 - `6) list-utxos` (Bob)
 - `7) verify-integrity`
 - `8) snapshot`
 - `9) refresh-token` (owner recovery flow when token expired/mismatch)
+- `11) dashboard` (session telemetry on demand)
+
+Interactive UX behavior:
+- Inputs numericos invalidos en `amount`/`fee` se bloquean con mensaje controlado (sin traceback Python).
+- Transferencia requiere `sender_token` explicito; no hay fallback implicito de token de sesion.
+- El dashboard ya no se imprime en cada accion; se consulta bajo demanda.
 
 ### Reset persistence data
 
