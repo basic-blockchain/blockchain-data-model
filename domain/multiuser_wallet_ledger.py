@@ -84,6 +84,7 @@ class MultiUserWalletLedger:
         self.exchange_rates: dict[str, dict] = {}
         self.role_permission_overrides: dict[str, list[str]] = {}
         self.audit_log: list[dict] = []
+        self._user_seq: int = 0
         self.user_permission_overrides: dict[str, list[str]] = {}
 
     RISK_PROFILE_DEFAULTS: dict[str, dict[str, str | None]] = {
@@ -185,6 +186,9 @@ class MultiUserWalletLedger:
             self._rotate_wallet_token(wallet, now=now)
 
     def refresh_wallet_token(self, user_id: str, wallet_id: str, current_token: str = "") -> str | dict:
+        resolved = self.resolve_user_id(user_id)
+        if resolved:
+            user_id = resolved
         if user_id not in self.users:
             return f"Error: el usuario {user_id} no existe."
         if wallet_id not in self.wallets:
@@ -251,9 +255,23 @@ class MultiUserWalletLedger:
     def is_empty(self) -> bool:
         return len(self.users) == 0
 
-    def create_user(self, user_id: str, display_name: str, password: str = "", role: str = "", invitation_token: str = "", first_name: str = "", last_name: str = "", email: str = "", username: str = "") -> dict | str:
-        if not user_id or not display_name:
-            return "Error: user_id y display_name son requeridos."
+    def _next_user_id(self) -> str:
+        self._user_seq += 1
+        return f"USR-{self._user_seq:05d}"
+
+    def resolve_user_id(self, identifier: str) -> str | None:
+        if identifier in self.users:
+            return identifier
+        for user in self.users.values():
+            if user.username and user.username == identifier:
+                return user.user_id
+        return None
+
+    def create_user(self, user_id: str = "", display_name: str = "", password: str = "", role: str = "", invitation_token: str = "", first_name: str = "", last_name: str = "", email: str = "", username: str = "") -> dict | str:
+        if not display_name:
+            return "Error: display_name es requerido."
+        if not user_id:
+            user_id = self._next_user_id()
         if user_id == TREASURY_USER_ID:
             return "Error: el identificador __TREASURY__ esta reservado para el sistema."
         if user_id in self.users:
@@ -382,6 +400,9 @@ class MultiUserWalletLedger:
         return verify_password(password, cred["password_hash"])
 
     def login(self, user_id: str, password: str, jwt_secret: str, jwt_ttl: int = 3600, activation_code: str = "") -> dict | str:
+        resolved = self.resolve_user_id(user_id)
+        if resolved:
+            user_id = resolved
         if not self.authenticate(user_id, password):
             self._audit(user_id, "LOGIN_FAILED", "USER", user_id)
             return "Error: credenciales invalidas."
@@ -1841,5 +1862,16 @@ class MultiUserWalletLedger:
             ledger.user_permission_overrides[uid] = list(perms)
 
         ledger.audit_log = list(snapshot.get("audit_log", []))
+
+        max_seq = 0
+        for uid in ledger.users:
+            if uid.startswith("USR-"):
+                try:
+                    seq = int(uid.split("-", 1)[1])
+                    if seq > max_seq:
+                        max_seq = seq
+                except (ValueError, IndexError):
+                    pass
+        ledger._user_seq = max_seq
 
         return ledger
