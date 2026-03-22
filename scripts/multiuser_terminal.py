@@ -587,7 +587,25 @@ def main() -> None:
         _print_menu()
 
         option = input(f"\n  {_cyan('›')} {_bold('Opcion')}: ").strip()
-        store, ledger = _load(store_file)
+
+        if option == "0":
+            print()
+            print(_box_top())
+            print(_box_line(_cyan("  Sesion finalizada. Hasta pronto."), "center"))
+            print(_box_bot())
+            print()
+            break
+
+        try:
+            store, ledger = _load(store_file)
+        except Exception as exc:
+            _print_result_box("ERROR", "startup", str(exc))
+            _print_result_box(
+                "ERROR",
+                "migration-hint",
+                "Ejecuta: PYTHONPATH=. py migrations/migrate.py",
+            )
+            break
 
         if option == "1":
             _section_header("CREAR USUARIO")
@@ -949,14 +967,6 @@ def main() -> None:
                 session, action="list-revisions", result=result,
                 revision_id=None, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
             )
-
-        elif option == "0":
-            print()
-            print(_box_top())
-            print(_box_line(_cyan("  Sesion finalizada. Hasta pronto."), "center"))
-            print(_box_bot())
-            print()
-            break
 
         else:
             _print_result_box("ERROR", "invalid-option", f"Opcion '{option}' no reconocida.")
