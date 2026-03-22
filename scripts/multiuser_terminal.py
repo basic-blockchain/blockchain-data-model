@@ -311,7 +311,7 @@ def _print_token_notice(token: str) -> None:
     print(_box_mid())
     print(_box_line(f"  Token: {_bold(token)}"))
     print(_box_line(_dim("  Usa este token en transfer como sender_token.")))
-    print(_box_line(_dim("  Expira en 120 segundos.")))
+    print(_box_line(_dim("  Expira en 5 minutos.")))
     print(_box_bot())
 
 
@@ -758,11 +758,14 @@ def _auth_flow(store_file) -> SessionState:
         if not ledger.is_account_activated(user_id):
             activation_code = _prompt("activation_code", hint="(cuenta pendiente de activacion)")
 
+        store, ledger = _load(store_file)
         result = ledger.login(
             user_id, password, jwt_secret, jwt_ttl,
             activation_code=activation_code,
         )
         if isinstance(result, dict):
+            if activation_code:
+                store.save_ledger(ledger)
             session.auth_user_id = result["user_id"]
             session.auth_roles = result["roles"]
             session.jwt_token = result["access_token"]
