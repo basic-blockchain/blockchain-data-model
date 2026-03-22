@@ -1640,10 +1640,71 @@ def _cmd_reset_role_permissions(ctx: CommandContext) -> None:
     _execute_and_track(ctx, action="reset-role-permissions", result=result, revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units)
 
 
+# ── Admin token re-validation (sudo) ─────────────────────
+
+def _require_admin_token(ctx: CommandContext, action_label: str) -> bool:
+    """Prompt ADMIN to re-enter JWT token for sensitive operations.
+
+    Returns True if validated. Raises _SkipCommand on failure after retries.
+    """
+    from domain.auth import decode_jwt
+    from config.settings import get_settings
+
+    settings = get_settings()
+    if not settings.jwt_secret:
+        _print_result_box("ERROR", action_label, "JWT_SECRET no configurado.")
+        raise _SkipCommand
+
+    print()
+    print(_box_top())
+    print(_box_line(_yellow("  VALIDACION DE SEGURIDAD")))
+    print(_box_mid())
+    print(_box_line(f"  {_dim('Operacion sensible. Ingresa tu token de sesion para confirmar.')}"))
+    print(_box_line(f"  {_dim('Si tu token ha expirado, escribe')} {_bold('refresh')} {_dim('para renovarlo.')}"))
+    print(_box_bot())
+
+    for attempt in range(3):
+        token_input = _prompt("token", hint="(JWT o 'refresh')")
+
+        if token_input.lower() == "refresh":
+            # Re-authenticate with password to get new token
+            password = _prompt("password", hint="(tu password actual)")
+            result = ctx.ledger.login(
+                ctx.session.auth_user_id, password,
+                settings.jwt_secret, settings.jwt_ttl_seconds,
+            )
+            if isinstance(result, dict):
+                ctx.session.jwt_token = result["access_token"]
+                _print_result_box("SUCCESS", "token-refresh", "Token renovado exitosamente.")
+                return True
+            _print_result_box("ERROR", "token-refresh", "Credenciales invalidas.")
+            if attempt < 2:
+                print(_dim(f"  Intentos restantes: {2 - attempt}"))
+            continue
+
+        # Validate the provided token
+        try:
+            payload = decode_jwt(token_input, settings.jwt_secret)
+            if payload.get("sub") != ctx.session.auth_user_id:
+                _print_result_box("ERROR", action_label, "Token no corresponde al usuario actual.")
+                if attempt < 2:
+                    print(_dim(f"  Intentos restantes: {2 - attempt}"))
+                continue
+            return True
+        except Exception:
+            _print_result_box("ERROR", action_label, "Token invalido o expirado. Escribe 'refresh' para renovar.")
+            if attempt < 2:
+                print(_dim(f"  Intentos restantes: {2 - attempt}"))
+
+    _print_result_box("ERROR", action_label, "Maximo de intentos alcanzado. Operacion cancelada.")
+    raise _SkipCommand
+
+
 # ── Moderation handlers ──────────────────────────────────
 
 def _cmd_freeze_wallet(ctx: CommandContext) -> None:
     _section_header("CONGELAR WALLET")
+    _require_admin_token(ctx, "freeze-wallet")
     print()
     print(_box_top())
     print(_box_line(_cyan("  Modo de congelamiento:")))
@@ -1686,6 +1747,7 @@ def _cmd_freeze_wallet(ctx: CommandContext) -> None:
 
 def _cmd_unfreeze_wallet(ctx: CommandContext) -> None:
     _section_header("DESCONGELAR WALLET")
+    _require_admin_token(ctx, "unfreeze-wallet")
     print()
     print(_box_top())
     print(_box_line(_cyan("  Modo de descongelamiento:")))
@@ -1728,6 +1790,7 @@ def _cmd_unfreeze_wallet(ctx: CommandContext) -> None:
 
 def _cmd_ban_user(ctx: CommandContext) -> None:
     _section_header("BANEAR USUARIO")
+    _require_admin_token(ctx, "ban-user")
     user_id = _prompt("user_id")
     input_units = _measure_units(user_id)
     started_at = time.perf_counter()
@@ -1744,6 +1807,7 @@ def _cmd_ban_user(ctx: CommandContext) -> None:
 
 def _cmd_unban_user(ctx: CommandContext) -> None:
     _section_header("DESBANEAR USUARIO")
+    _require_admin_token(ctx, "unban-user")
     user_id = _prompt("user_id")
     unfreeze = _prompt_confirm("Desbanear Y descongelar todas las wallets del usuario?")
     input_units = _measure_units(user_id)
