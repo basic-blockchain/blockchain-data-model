@@ -880,7 +880,11 @@ def main() -> None:
 
         elif option == "2":
             _section_header("CREAR WALLET")
-            user_id = _prompt("user_id")
+            if "ADMIN" in session.auth_roles:
+                user_id = _prompt("user_id")
+            else:
+                user_id = session.auth_user_id
+                print(_dim(f"  Usuario: {user_id}"))
             wallet_id = _prompt("wallet_id", hint="(20-30 chars, enter=auto)")
             currency = _prompt("currency", default="USDX")
             model = _prompt("model", hint="ACCOUNT | UTXO", default="ACCOUNT").upper()
@@ -933,7 +937,31 @@ def main() -> None:
 
         elif option == "4":
             _section_header("TRANSFERENCIA")
-            from_wallet = _prompt("from_wallet")
+            if "ADMIN" not in session.auth_roles:
+                my_wallets = ledger.list_wallets(user_id=session.auth_user_id)
+                my_wallet_ids = [w["wallet_id"] for w in my_wallets]
+                if not my_wallets:
+                    _print_result_box("ERROR", "transfer", "No tienes wallets creadas.")
+                    continue
+                if len(my_wallets) == 1:
+                    from_wallet = my_wallets[0]["wallet_id"]
+                    print(_dim(f"  Wallet origen: {from_wallet}"))
+                else:
+                    print()
+                    print(_box_top())
+                    print(_box_line(_cyan("  Tus wallets:")))
+                    print(_box_mid())
+                    for i, w in enumerate(my_wallets, 1):
+                        print(_box_line(f"  {_yellow(f'[{i}]')} {w['wallet_id']}  {_bold(w['balance'])} {w['currency']}"))
+                    print(_box_bot())
+                    sel = _prompt("Selecciona wallet origen", hint=f"1-{len(my_wallets)}")
+                    try:
+                        from_wallet = my_wallets[int(sel) - 1]["wallet_id"]
+                    except (ValueError, IndexError):
+                        _print_result_box("ERROR", "transfer", "Seleccion invalida.")
+                        continue
+            else:
+                from_wallet = _prompt("from_wallet")
             to_wallet = _prompt("to_wallet")
             amount = _prompt("amount")
             fee = _prompt("fee", default="0")
@@ -976,12 +1004,19 @@ def main() -> None:
 
         elif option == "5":
             _section_header("LISTAR WALLETS")
-            user_id = _prompt("user_id", hint="(opcional, filtrar por usuario)")
+            is_admin = "ADMIN" in session.auth_roles
+            if is_admin:
+                user_id = _prompt("user_id", hint="(opcional, filtrar por usuario)")
+            else:
+                user_id = session.auth_user_id
             input_units = _measure_units(user_id)
             started_at = time.perf_counter()
             result = ledger.list_wallets(user_id=user_id)
             elapsed_ms = (time.perf_counter() - started_at) * 1000.0
-            _print_data_box(f"Wallets ({len(result)} encontradas)", result)
+            if not result and not is_admin:
+                _print_result_box("ERROR", "list-wallets", "No tienes wallets creadas. Usa la opcion [2] para crear una.")
+            else:
+                _print_data_box(f"Wallets ({len(result)} encontradas)", result)
             _apply_result_to_session(
                 session, action="list-wallets", result=result,
                 revision_id=None, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
@@ -989,7 +1024,30 @@ def main() -> None:
 
         elif option == "6":
             _section_header("LISTAR UTXOS")
-            wallet_id = _prompt("wallet_id", hint="(opcional)")
+            is_admin = "ADMIN" in session.auth_roles
+            if is_admin:
+                wallet_id = _prompt("wallet_id", hint="(opcional)")
+            else:
+                my_wallets = ledger.list_wallets(user_id=session.auth_user_id)
+                if not my_wallets:
+                    _print_result_box("ERROR", "list-utxos", "No tienes wallets creadas.")
+                    continue
+                if len(my_wallets) == 1:
+                    wallet_id = my_wallets[0]["wallet_id"]
+                else:
+                    print()
+                    print(_box_top())
+                    print(_box_line(_cyan("  Tus wallets:")))
+                    print(_box_mid())
+                    for i, w in enumerate(my_wallets, 1):
+                        print(_box_line(f"  {_yellow(f'[{i}]')} {w['wallet_id']}  {_dim(w['model'])}"))
+                    print(_box_bot())
+                    sel = _prompt("Selecciona", hint=f"1-{len(my_wallets)}")
+                    try:
+                        wallet_id = my_wallets[int(sel) - 1]["wallet_id"]
+                    except (ValueError, IndexError):
+                        _print_result_box("ERROR", "list-utxos", "Seleccion invalida.")
+                        continue
             input_units = _measure_units(wallet_id)
             started_at = time.perf_counter()
             result = ledger.list_utxos(wallet_id=wallet_id)
@@ -1140,6 +1198,11 @@ def main() -> None:
                     except (ValueError, IndexError):
                         _print_result_box("ERROR", "balance", "Seleccion invalida.")
                         continue
+            if wallet_id and "ADMIN" not in session.auth_roles:
+                my_wallet_ids = [w["wallet_id"] for w in ledger.list_wallets(user_id=session.auth_user_id)]
+                if wallet_id not in my_wallet_ids:
+                    _print_result_box("ERROR", "balance", "No tienes acceso a esa wallet.")
+                    continue
             input_units = _measure_units(wallet_id)
             started_at = time.perf_counter()
             balance = ledger.get_wallet_balance(wallet_id)
