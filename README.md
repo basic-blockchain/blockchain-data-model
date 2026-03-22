@@ -2,14 +2,14 @@
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![PostgreSQL 16](https://img.shields.io/badge/PostgreSQL-16-336791?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
-[![SemVer](https://img.shields.io/badge/semver-2.4.0-3D7EA6)](https://semver.org/)
+[![SemVer](https://img.shields.io/badge/semver-2.5.0-3D7EA6)](https://semver.org/)
 [![Docs](https://img.shields.io/badge/docs-available-1F6FEB)](docs/MODEL_SIMULATION_GUIDE.md)
 
 Simulacion realista de dos modelos blockchain (UTXO y Account-based) con gestion multiusuario de wallets, trazabilidad de cadena de suministro, compliance, autenticacion (bcrypt + JWT) y control de acceso basado en roles (RBAC).
 
 Current release line:
-- Latest stable release: `v2.4.0`
-- Next target: `v2.5.0`
+- Latest stable release: `v2.5.0`
+- Next target: `v2.6.0`
 
 ---
 
@@ -279,6 +279,7 @@ SemVer estricto con tags anotados. Release notes en `docs/releases/vX.Y.Z.md`.
 
 | Version | Highlight |
 |---------|-----------|
+| v2.5.0 | Self-registration, wallet ownership, Command Registry refactor |
 | v2.4.0 | Auth (bcrypt + JWT) + RBAC (ADMIN/OPERATOR/VIEWER) |
 | v2.3.0 | Terminal UX profesional + 21 opciones interactivas |
 | v2.2.0 | Persistencia PostgreSQL + Repository Pattern |
@@ -287,6 +288,7 @@ SemVer estricto con tags anotados. Release notes en `docs/releases/vX.Y.Z.md`.
 
 ## Roadmap
 
-- `v2.5.0` — API REST (FastAPI + Pydantic)
-- `v2.6.0` — GraphQL (Strawberry)
-- `v2.7.0` — Docker + DockerHub
+- `v2.6.0` — Cross-currency exchange con tasas de conversion
+- `v2.7.0` — API REST (FastAPI + Pydantic)
+- `v2.8.0` — GraphQL (Strawberry)
+- `v2.9.0` — Docker + DockerHub
