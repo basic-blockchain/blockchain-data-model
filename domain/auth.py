@@ -42,6 +42,12 @@ class Permission(str, Enum):
     UNFREEZE_WALLET = "UNFREEZE_WALLET"
     BAN_USER = "BAN_USER"
     UNBAN_USER = "UNBAN_USER"
+    UPDATE_USER = "UPDATE_USER"
+    DELETE_USER = "DELETE_USER"
+    RESTORE_USER = "RESTORE_USER"
+    GENERATE_TEMP_PASSWORD = "GENERATE_TEMP_PASSWORD"
+    VIEW_AUDIT_LOG = "VIEW_AUDIT_LOG"
+    UPDATE_PROFILE = "UPDATE_PROFILE"
 
 
 ROLE_PERMISSIONS: dict[str, set[str]] = {
@@ -51,6 +57,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         Permission.TRANSFER,
         Permission.EXCHANGE,
         Permission.MINT,
+        Permission.UPDATE_PROFILE,
         Permission.VIEW_USERS,
         Permission.VIEW_WALLETS,
         Permission.VIEW_TRANSFERS,
@@ -63,6 +70,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         Permission.CREATE_WALLET,
         Permission.TRANSFER,
         Permission.EXCHANGE,
+        Permission.UPDATE_PROFILE,
         Permission.VIEW_USERS,
         Permission.VIEW_WALLETS,
         Permission.VIEW_TRANSFERS,
@@ -142,6 +150,15 @@ _ACTIVATION_ALPHABET = string.ascii_uppercase + string.digits
 
 def generate_invitation_token() -> str:
     return secrets.token_hex(16)
+
+
+def generate_temp_password() -> str:
+    alphabet = string.ascii_letters + string.digits + "!@#$%"
+    return "".join(secrets.choice(alphabet) for _ in range(12))
+
+
+def generate_temp_token() -> str:
+    return secrets.token_hex(32)
 
 
 def generate_activation_code() -> str:

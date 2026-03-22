@@ -245,6 +245,18 @@ def main() -> None:
     cmd_user.add_argument("--user-id", required=True)
     cmd_user.add_argument("--display-name", required=True)
     cmd_user.add_argument("--password", default="")
+    cmd_user.add_argument("--first-name", default="")
+    cmd_user.add_argument("--last-name", default="")
+    cmd_user.add_argument("--email", default="")
+    cmd_user.add_argument("--username", default="")
+
+    cmd_update_profile = subparsers.add_parser("update-profile", help="Update user profile (own or ADMIN for others)")
+    _add_json_flag(cmd_update_profile)
+    cmd_update_profile.add_argument("--user-id", required=True)
+    cmd_update_profile.add_argument("--first-name", default="")
+    cmd_update_profile.add_argument("--last-name", default="")
+    cmd_update_profile.add_argument("--email", default="")
+    cmd_update_profile.add_argument("--username", default="")
 
     cmd_wallet = subparsers.add_parser("create-wallet", help="Create a wallet for an existing user")
     _add_json_flag(cmd_wallet)
@@ -414,6 +426,37 @@ def main() -> None:
     cmd_unban_user.add_argument("--user-id", required=True)
     cmd_unban_user.add_argument("--unfreeze-wallets", type=_parse_optional_bool, default=True)
 
+    # ── User management commands ──
+    cmd_update_user = subparsers.add_parser("update-user", help="Update user ID or display name (ADMIN only)")
+    _add_json_flag(cmd_update_user)
+    cmd_update_user.add_argument("--user-id", required=True)
+    cmd_update_user.add_argument("--new-user-id", default="")
+    cmd_update_user.add_argument("--new-display-name", default="")
+
+    cmd_delete_user = subparsers.add_parser("delete-user", help="Soft-delete a user (ADMIN only)")
+    _add_json_flag(cmd_delete_user)
+    cmd_delete_user.add_argument("--user-id", required=True)
+
+    cmd_restore_user = subparsers.add_parser("restore-user", help="Restore a soft-deleted user (ADMIN only)")
+    _add_json_flag(cmd_restore_user)
+    cmd_restore_user.add_argument("--user-id", required=True)
+    cmd_restore_user.add_argument("--unfreeze-wallets", type=_parse_optional_bool, default=True)
+
+    cmd_gen_temp_pw = subparsers.add_parser("generate-temp-password", help="Generate temporary password for a user (ADMIN only)")
+    _add_json_flag(cmd_gen_temp_pw)
+    cmd_gen_temp_pw.add_argument("--user-id", required=True)
+
+    cmd_change_pw = subparsers.add_parser("change-password", help="Change your own password")
+    _add_json_flag(cmd_change_pw)
+    cmd_change_pw.add_argument("--current-password", required=True)
+    cmd_change_pw.add_argument("--new-password", required=True)
+
+    cmd_audit = subparsers.add_parser("list-audit-log", help="List audit log entries (ADMIN only)")
+    _add_json_flag(cmd_audit)
+    cmd_audit.add_argument("--user-id", default="")
+    cmd_audit.add_argument("--action", default="")
+    cmd_audit.add_argument("--limit", type=int, default=50)
+
     args = parser.parse_args()
     store_file = Path(args.store_file)
     output_json = bool(args.json or getattr(args, "cmd_json", False))
@@ -470,7 +513,11 @@ def main() -> None:
         # ── Admin-only commands ──
         elif args.command == "create-user":
             _require_auth(Permission.CREATE_USER)
-            result = ledger.create_user(args.user_id, args.display_name, password=getattr(args, "password", ""))
+            result = ledger.create_user(args.user_id, args.display_name, password=getattr(args, "password", ""), first_name=getattr(args, "first_name", ""), last_name=getattr(args, "last_name", ""), email=getattr(args, "email", ""), username=getattr(args, "username", ""))
+            mutate = True
+        elif args.command == "update-profile":
+            _require_auth(Permission.UPDATE_PROFILE)
+            result = ledger.update_profile(args.user_id, first_name=args.first_name or None, last_name=args.last_name or None, email=args.email or None, username=args.username or None)
             mutate = True
         elif args.command == "assign-role":
             _require_auth(Permission.ASSIGN_ROLE)
@@ -565,6 +612,32 @@ def main() -> None:
             _require_auth(Permission.UNBAN_USER)
             result = ledger.unban_user(args.user_id, unfreeze_wallets=args.unfreeze_wallets)
             mutate = True
+
+        # ── User management commands ──
+        elif args.command == "update-user":
+            _require_auth(Permission.UPDATE_USER)
+            result = ledger.update_user(args.user_id, new_user_id=args.new_user_id or None, new_display_name=args.new_display_name or None)
+            mutate = True
+        elif args.command == "delete-user":
+            _require_auth(Permission.DELETE_USER)
+            result = ledger.delete_user(args.user_id)
+            mutate = True
+        elif args.command == "restore-user":
+            _require_auth(Permission.RESTORE_USER)
+            result = ledger.restore_user(args.user_id, unfreeze_wallets=args.unfreeze_wallets)
+            mutate = True
+        elif args.command == "generate-temp-password":
+            _require_auth(Permission.GENERATE_TEMP_PASSWORD)
+            result = ledger.generate_temp_password_for_user(args.user_id)
+            mutate = True
+        elif args.command == "change-password":
+            payload = _require_auth(Permission.TRANSFER)
+            caller_id = payload.get("sub", "")
+            result = ledger.change_password(caller_id, args.current_password, args.new_password)
+            mutate = True
+        elif args.command == "list-audit-log":
+            _require_auth(Permission.VIEW_AUDIT_LOG)
+            result = ledger.list_audit_log(limit=args.limit, user_id=args.user_id, action=args.action)
 
         # ── Admin commands (ADMIN only) ──
         elif args.command == "set-policy":

@@ -197,8 +197,17 @@ ADMIN_MENU = [
         ("37", "ban-user", "Banear usuario"),
         ("38", "unban-user", "Desbanear usuario"),
     ]),
+    ("GESTION DE USUARIOS", [
+        ("39", "update-user", "Modificar usuario (ID o nombre)"),
+        ("40", "delete-user", "Eliminar usuario (soft delete)"),
+        ("41", "restore-user", "Restaurar usuario eliminado"),
+        ("42", "generate-temp-password", "Generar password temporal"),
+        ("43", "list-audit-log", "Ver log de auditoria"),
+    ]),
     ("SISTEMA", [
         ("22", "generate-admin-token", "Generar token de invitacion ADMIN"),
+        ("44", "change-password", "Cambiar mi contrasena"),
+        ("45", "update-profile", "Actualizar mi perfil"),
         ("11", "dashboard", "Metricas de sesion y rendimiento"),
         ("0", "exit", "Salir del terminal"),
     ]),
@@ -224,6 +233,8 @@ OPERATOR_MENU = [
         ("7", "verify-integrity", "Verificar integridad"),
     ]),
     ("SISTEMA", [
+        ("44", "change-password", "Cambiar mi contrasena"),
+        ("45", "update-profile", "Actualizar mi perfil"),
         ("11", "dashboard", "Metricas de sesion"),
         ("0", "exit", "Salir"),
     ]),
@@ -248,6 +259,8 @@ VIEWER_MENU = [
         ("7", "verify-integrity", "Verificar integridad"),
     ]),
     ("SISTEMA", [
+        ("44", "change-password", "Cambiar mi contrasena"),
+        ("45", "update-profile", "Actualizar mi perfil"),
         ("11", "dashboard", "Metricas de sesion"),
         ("0", "exit", "Salir"),
     ]),
@@ -834,6 +847,27 @@ def _auth_flow(store_file) -> SessionState:
             print(_box_mid())
             print(_box_line(f"  {_dim('Roles:')}  {_bold(', '.join(result['roles']) or 'sin roles')}"))
             print(_box_bot())
+
+            if result.get("must_change_password"):
+                print()
+                print(_box_top())
+                print(_box_line(_yellow("  CAMBIO DE CONTRASENA OBLIGATORIO")))
+                print(_box_mid())
+                print(_box_line(_dim("  Tu contrasena es temporal. Debes cambiarla ahora.")))
+                print(_box_bot())
+                print()
+                new_pw = _prompt("nueva contrasena", hint="(min 4 caracteres)")
+                if len(new_pw) < 4:
+                    print(_red("  Contrasena muy corta. Reinicia el terminal."))
+                    raise SystemExit(1)
+                store, ledger = _load(store_file)
+                change_result = ledger.change_password(user_id, password, new_pw)
+                if isinstance(change_result, str) and change_result.startswith("Error"):
+                    print(_red(f"  {change_result}"))
+                    raise SystemExit(1)
+                store.save_ledger(ledger)
+                _print_result_box("SUCCESS", "change-password", "Contrasena actualizada. Continua con tu sesion.")
+
             return session
 
         if "suspendida" in str(result).lower():
@@ -899,12 +933,16 @@ def _cmd_create_user(ctx: CommandContext) -> None:
     if role not in ("ADMIN", "OPERATOR", "VIEWER"):
         _print_result_box("ERROR", "create-user", f"Rol invalido: {role}")
         raise _SkipCommand
+    email = _prompt("email", hint="(obligatorio)")
+    username = _prompt("username", hint=f"(enter={display_name})")
+    first_name = _prompt("first_name", hint="(opcional)")
+    last_name = _prompt("last_name", hint="(opcional)")
     invitation_token = ""
     if role == "ADMIN":
         invitation_token = _prompt("invitation_token", hint="(requerido para ADMIN)")
-    input_units = _measure_units(user_id, display_name, role)
+    input_units = _measure_units(user_id, display_name, role, email, username)
     started_at = time.perf_counter()
-    result = ctx.ledger.create_user(user_id, display_name, password=password, role=role, invitation_token=invitation_token)
+    result = ctx.ledger.create_user(user_id, display_name, password=password, role=role, invitation_token=invitation_token, first_name=first_name, last_name=last_name, email=email, username=username)
     if isinstance(result, str) and result.startswith("Error"):
         elapsed_ms = (time.perf_counter() - started_at) * 1000.0
         _print_result_box("ERROR", "create-user", result)
@@ -1823,6 +1861,148 @@ def _cmd_unban_user(ctx: CommandContext) -> None:
     _execute_and_track(ctx, action="unban-user", result=result, revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units)
 
 
+# ── User management handlers ─────────────────────────────
+
+def _cmd_update_user(ctx: CommandContext) -> None:
+    _section_header("MODIFICAR USUARIO")
+    _require_admin_token(ctx, "update-user")
+    user_id = _prompt("user_id")
+    new_user_id = _prompt("new_user_id", hint="(vacio=no cambiar)")
+    new_display_name = _prompt("new_display_name", hint="(vacio=no cambiar)")
+    input_units = _measure_units(user_id, new_user_id, new_display_name)
+    started_at = time.perf_counter()
+    result = ctx.ledger.update_user(user_id, new_user_id=new_user_id or None, new_display_name=new_display_name or None)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    if isinstance(result, str) and result.startswith("Error"):
+        _print_result_box("ERROR", "update-user", result)
+        _execute_and_track(ctx, action="update-user", result=result, revision_id=None, is_error=True, elapsed_ms=elapsed_ms, input_units=input_units)
+        raise _SkipCommand
+    rev = _persist(ctx.store, ctx.ledger)
+    _print_data_box("Usuario actualizado", result if isinstance(result, dict) else {"resultado": result}, rev)
+    _execute_and_track(ctx, action="update-user", result=result, revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units)
+
+
+def _cmd_delete_user(ctx: CommandContext) -> None:
+    _section_header("ELIMINAR USUARIO (SOFT DELETE)")
+    _require_admin_token(ctx, "delete-user")
+    user_id = _prompt("user_id")
+    input_units = _measure_units(user_id)
+    started_at = time.perf_counter()
+    result = ctx.ledger.delete_user(user_id)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    if isinstance(result, str) and result.startswith("Error"):
+        _print_result_box("ERROR", "delete-user", result)
+        _execute_and_track(ctx, action="delete-user", result=result, revision_id=None, is_error=True, elapsed_ms=elapsed_ms, input_units=input_units)
+        raise _SkipCommand
+    rev = _persist(ctx.store, ctx.ledger)
+    _print_data_box("Usuario eliminado", result if isinstance(result, dict) else {"resultado": result}, rev)
+    _execute_and_track(ctx, action="delete-user", result=result, revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units)
+
+
+def _cmd_restore_user(ctx: CommandContext) -> None:
+    _section_header("RESTAURAR USUARIO")
+    _require_admin_token(ctx, "restore-user")
+    user_id = _prompt("user_id")
+    unfreeze = _prompt_confirm("Restaurar Y descongelar wallets del usuario?")
+    input_units = _measure_units(user_id)
+    started_at = time.perf_counter()
+    result = ctx.ledger.restore_user(user_id, unfreeze_wallets=unfreeze)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    if isinstance(result, str) and result.startswith("Error"):
+        _print_result_box("ERROR", "restore-user", result)
+        _execute_and_track(ctx, action="restore-user", result=result, revision_id=None, is_error=True, elapsed_ms=elapsed_ms, input_units=input_units)
+        raise _SkipCommand
+    rev = _persist(ctx.store, ctx.ledger)
+    _print_data_box("Usuario restaurado", result if isinstance(result, dict) else {"resultado": result}, rev)
+    _execute_and_track(ctx, action="restore-user", result=result, revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units)
+
+
+def _cmd_generate_temp_password(ctx: CommandContext) -> None:
+    _section_header("GENERAR PASSWORD TEMPORAL")
+    _require_admin_token(ctx, "generate-temp-password")
+    user_id = _prompt("user_id")
+    input_units = _measure_units(user_id)
+    started_at = time.perf_counter()
+    result = ctx.ledger.generate_temp_password_for_user(user_id)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    if isinstance(result, str) and result.startswith("Error"):
+        _print_result_box("ERROR", "generate-temp-password", result)
+        _execute_and_track(ctx, action="generate-temp-password", result=result, revision_id=None, is_error=True, elapsed_ms=elapsed_ms, input_units=input_units)
+        raise _SkipCommand
+    rev = _persist(ctx.store, ctx.ledger)
+    print()
+    print(_box_top())
+    print(_box_line(_yellow("  PASSWORD TEMPORAL GENERADO")))
+    print(_box_mid())
+    print(_box_line(f"  {_dim('Usuario:')}     {_bold(user_id)}"))
+    print(_box_line(f"  {_dim('Password:')}    {_green(_bold(result.get('temp_password', '')))}"))
+    print(_box_line(f"  {_dim('Token:')}       {result.get('token_temp', '')[:20]}..."))
+    print(_box_mid())
+    print(_box_line(_dim("  Entrega estos datos al usuario. El password es de un solo uso.")))
+    print(_box_line(_dim("  Al ingresar, el usuario debera cambiar su contrasena.")))
+    print(_box_bot())
+    _execute_and_track(ctx, action="generate-temp-password", result=result, revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units)
+
+
+def _cmd_list_audit_log(ctx: CommandContext) -> None:
+    _section_header("LOG DE AUDITORIA")
+    user_id = _prompt("user_id", hint="(filtrar por usuario, vacio=todos)")
+    action = _prompt("action", hint="(filtrar por accion, vacio=todas)")
+    limit_raw = _prompt("limit", default="20")
+    limit = int(limit_raw) if limit_raw.isdigit() else 20
+    input_units = _measure_units(user_id, action, limit)
+    started_at = time.perf_counter()
+    result = ctx.ledger.list_audit_log(limit=limit, user_id=user_id, action=action)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    if not result:
+        _print_result_box("SUCCESS", "list-audit-log", "No hay entradas de auditoria.")
+    else:
+        _print_data_box(f"Audit Log ({len(result)} entradas)", result)
+    _execute_and_track(ctx, action="list-audit-log", result=result, revision_id=None, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units)
+
+
+def _cmd_change_password(ctx: CommandContext) -> None:
+    _section_header("CAMBIAR CONTRASENA")
+    current_password = _prompt("current_password")
+    new_password = _prompt("new_password", hint="(min 4 caracteres)")
+    input_units = _measure_units(current_password, new_password)
+    started_at = time.perf_counter()
+    result = ctx.ledger.change_password(ctx.session.auth_user_id, current_password, new_password)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    if isinstance(result, str) and result.startswith("Error"):
+        _print_result_box("ERROR", "change-password", result)
+        _execute_and_track(ctx, action="change-password", result=result, revision_id=None, is_error=True, elapsed_ms=elapsed_ms, input_units=input_units)
+        raise _SkipCommand
+    rev = _persist(ctx.store, ctx.ledger)
+    _print_data_box("Contrasena actualizada", result if isinstance(result, dict) else {"resultado": result}, rev)
+    _execute_and_track(ctx, action="change-password", result=result, revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units)
+
+
+def _cmd_update_profile(ctx: CommandContext) -> None:
+    _section_header("ACTUALIZAR PERFIL")
+    is_admin = "ADMIN" in ctx.session.auth_roles
+    if is_admin:
+        user_id = _prompt("user_id", hint=f"(enter={ctx.session.auth_user_id})", default=ctx.session.auth_user_id)
+    else:
+        user_id = ctx.session.auth_user_id
+        print(_dim(f"  Usuario: {user_id}"))
+    first_name = _prompt("first_name", hint="(vacio=no cambiar)")
+    last_name = _prompt("last_name", hint="(vacio=no cambiar)")
+    email = _prompt("email", hint="(vacio=no cambiar)")
+    username = _prompt("username", hint="(vacio=no cambiar)")
+    input_units = _measure_units(user_id, first_name, last_name, email, username)
+    started_at = time.perf_counter()
+    result = ctx.ledger.update_profile(user_id, first_name=first_name or None, last_name=last_name or None, email=email or None, username=username or None)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    if isinstance(result, str) and result.startswith("Error"):
+        _print_result_box("ERROR", "update-profile", result)
+        _execute_and_track(ctx, action="update-profile", result=result, revision_id=None, is_error=True, elapsed_ms=elapsed_ms, input_units=input_units)
+        raise _SkipCommand
+    rev = _persist(ctx.store, ctx.ledger)
+    _print_data_box("Perfil actualizado", result if isinstance(result, dict) else {"resultado": result}, rev)
+    _execute_and_track(ctx, action="update-profile", result=result, revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units)
+
+
 # ── Command handler registry ────────────────────────────
 
 from typing import Callable
@@ -1867,6 +2047,13 @@ COMMAND_HANDLERS: dict[str, tuple[Callable, str | None]] = {
     "36": (_cmd_unfreeze_wallet,         Permission.UNFREEZE_WALLET),
     "37": (_cmd_ban_user,                Permission.BAN_USER),
     "38": (_cmd_unban_user,              Permission.UNBAN_USER),
+    "39": (_cmd_update_user,             Permission.UPDATE_USER),
+    "40": (_cmd_delete_user,             Permission.DELETE_USER),
+    "41": (_cmd_restore_user,            Permission.RESTORE_USER),
+    "42": (_cmd_generate_temp_password,  Permission.GENERATE_TEMP_PASSWORD),
+    "43": (_cmd_list_audit_log,          Permission.VIEW_AUDIT_LOG),
+    "44": (_cmd_change_password,         None),
+    "45": (_cmd_update_profile,          Permission.UPDATE_PROFILE),
 }
 
 

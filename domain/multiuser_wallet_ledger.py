@@ -25,6 +25,12 @@ class UserRecord:
     display_name: str
     created_at: str
     banned: bool = False
+    updated_at: str = ""
+    deleted_at: str = ""
+    first_name: str = ""
+    last_name: str = ""
+    email: str = ""
+    username: str = ""
 
 
 @dataclass
@@ -77,6 +83,8 @@ class MultiUserWalletLedger:
         self.activation_codes: dict[str, dict] = {}
         self.exchange_rates: dict[str, dict] = {}
         self.role_permission_overrides: dict[str, list[str]] = {}
+        self.audit_log: list[dict] = []
+        self._user_seq: int = 0
         self.user_permission_overrides: dict[str, list[str]] = {}
 
     RISK_PROFILE_DEFAULTS: dict[str, dict[str, str | None]] = {
@@ -178,6 +186,9 @@ class MultiUserWalletLedger:
             self._rotate_wallet_token(wallet, now=now)
 
     def refresh_wallet_token(self, user_id: str, wallet_id: str, current_token: str = "") -> str | dict:
+        resolved = self.resolve_user_id(user_id)
+        if resolved:
+            user_id = resolved
         if user_id not in self.users:
             return f"Error: el usuario {user_id} no existe."
         if wallet_id not in self.wallets:
@@ -222,12 +233,45 @@ class MultiUserWalletLedger:
             return None
         return min(values)
 
+    def _audit(self, actor_id: str, action: str, target_type: str, target_id: str, details: dict | None = None) -> None:
+        self.audit_log.append({
+            "log_id": f"aud-{secrets.token_hex(8)}",
+            "timestamp": self._timestamp(),
+            "actor_id": actor_id,
+            "action": action,
+            "target_type": target_type,
+            "target_id": target_id,
+            "details": details or {},
+        })
+
+    def list_audit_log(self, limit: int = 50, user_id: str = "", action: str = "") -> list[dict]:
+        filtered = self.audit_log
+        if user_id:
+            filtered = [e for e in filtered if e["actor_id"] == user_id or e["target_id"] == user_id]
+        if action:
+            filtered = [e for e in filtered if e["action"] == action.upper()]
+        return filtered[-limit:]
+
     def is_empty(self) -> bool:
         return len(self.users) == 0
 
-    def create_user(self, user_id: str, display_name: str, password: str = "", role: str = "", invitation_token: str = "") -> dict | str:
-        if not user_id or not display_name:
-            return "Error: user_id y display_name son requeridos."
+    def _next_user_id(self) -> str:
+        self._user_seq += 1
+        return f"USR-{self._user_seq:05d}"
+
+    def resolve_user_id(self, identifier: str) -> str | None:
+        if identifier in self.users:
+            return identifier
+        for user in self.users.values():
+            if user.username and user.username == identifier:
+                return user.user_id
+        return None
+
+    def create_user(self, user_id: str = "", display_name: str = "", password: str = "", role: str = "", invitation_token: str = "", first_name: str = "", last_name: str = "", email: str = "", username: str = "") -> dict | str:
+        if not display_name:
+            return "Error: display_name es requerido."
+        if not user_id:
+            user_id = self._next_user_id()
         if user_id == TREASURY_USER_ID:
             return "Error: el identificador __TREASURY__ esta reservado para el sistema."
         if user_id in self.users:
@@ -251,6 +295,10 @@ class MultiUserWalletLedger:
             user_id=user_id,
             display_name=display_name,
             created_at=self._timestamp(),
+            first_name=first_name.strip(),
+            last_name=last_name.strip(),
+            email=email.strip(),
+            username=(username.strip() if username.strip() else display_name.strip()),
         )
         self.user_wallets[user_id] = []
         self.user_policies[user_id] = self._new_user_policy(user_id)
@@ -264,12 +312,16 @@ class MultiUserWalletLedger:
                 "password_hash": hash_password(password),
                 "created_at": now,
                 "updated_at": now,
+                "password_temp": False,
+                "token_temp": "",
             }
 
         if not role:
+            self._audit("SYSTEM", "USER_CREATED", "USER", user_id, {"role": ""})
             return f"Usuario {user_id} creado."
 
         result: dict = {"message": f"Usuario {user_id} creado.", "user_id": user_id, "role": role}
+        self._audit("SYSTEM", "USER_CREATED", "USER", user_id, {"role": role})
 
         if role in ("OPERATOR", "VIEWER"):
             code = generate_activation_code()
@@ -348,9 +400,16 @@ class MultiUserWalletLedger:
         return verify_password(password, cred["password_hash"])
 
     def login(self, user_id: str, password: str, jwt_secret: str, jwt_ttl: int = 3600, activation_code: str = "") -> dict | str:
+        resolved = self.resolve_user_id(user_id)
+        if resolved:
+            user_id = resolved
         if not self.authenticate(user_id, password):
+            self._audit(user_id, "LOGIN_FAILED", "USER", user_id)
             return "Error: credenciales invalidas."
+        if self.is_user_deleted(user_id):
+            return "Error: cuenta eliminada. Contacta a soporte tecnico."
         if self.is_user_banned(user_id):
+            self._audit(user_id, "LOGIN_BANNED", "USER", user_id)
             return "Error: cuenta suspendida. Contacta a soporte tecnico o servicio al cliente."
         if not self.is_account_activated(user_id):
             if not activation_code:
@@ -361,13 +420,19 @@ class MultiUserWalletLedger:
         from domain.auth import create_jwt
         roles = self.user_roles.get(user_id, [])
         token = create_jwt(user_id, roles, jwt_secret, jwt_ttl)
-        return {
+        cred = self.user_credentials.get(user_id, {})
+        must_change = bool(cred.get("password_temp", False))
+        result = {
             "access_token": token,
             "token_type": "Bearer",
             "expires_in": jwt_ttl,
             "user_id": user_id,
             "roles": roles,
         }
+        if must_change:
+            result["must_change_password"] = True
+        self._audit(user_id, "LOGIN_SUCCESS", "USER", user_id)
+        return result
 
     def assign_role(self, user_id: str, role: str) -> str:
         if user_id not in self.users:
@@ -381,6 +446,7 @@ class MultiUserWalletLedger:
         if role in roles:
             return f"Aviso: {user_id} ya tiene el role {role}."
         roles.append(role)
+        self._audit("SYSTEM", "ROLE_ASSIGNED", "USER", user_id, {"role": role})
         return f"Role {role} asignado a {user_id}."
 
     def remove_role(self, user_id: str, role: str) -> str:
@@ -391,6 +457,7 @@ class MultiUserWalletLedger:
         if role not in roles:
             return f"Error: {user_id} no tiene el role {role}."
         roles.remove(role)
+        self._audit("SYSTEM", "ROLE_REMOVED", "USER", user_id, {"role": role})
         return f"Role {role} removido de {user_id}."
 
     def get_user_roles(self, user_id: str) -> list[str]:
@@ -746,6 +813,7 @@ class MultiUserWalletLedger:
         self.wallets[final_wallet_id] = wallet
         self.utxos[final_wallet_id] = []
         self.user_wallets[user_id].append(final_wallet_id)
+        self._audit(user_id, "WALLET_CREATED", "WALLET", final_wallet_id, {"model": wallet_model, "currency": currency})
         return {
             "message": f"Wallet {final_wallet_id} creada para {user_id}.",
             "wallet_id": final_wallet_id,
@@ -793,6 +861,7 @@ class MultiUserWalletLedger:
                 "created_at": self._timestamp(),
             }
         )
+        self._audit("SYSTEM", "MINT", "WALLET", wallet_id, {"amount": str(minted)})
         return f"Mint {minted} aplicado a {wallet_id}."
 
     # ── Treasury (corporate wallet) ────────────────────────
@@ -915,6 +984,7 @@ class MultiUserWalletLedger:
         }
         transfer_record.update(exchange_metadata)
         self.transfers.append(transfer_record)
+        self._audit("SYSTEM", "TOP_UP", "WALLET", target_wallet_id, {"treasury": treasury_wallet_id, "amount": str(top_amount)})
         return f"Top-up {top_amount} de {treasury_wallet_id} a {target_wallet_id} aplicado."
 
     # ── Exchange rate management ──────────────────────────
@@ -973,6 +1043,7 @@ class MultiUserWalletLedger:
             self.role_permission_overrides[role] = [str(p) for p in ROLE_PERMISSIONS.get(role, set())]
         if permission not in self.role_permission_overrides[role]:
             self.role_permission_overrides[role].append(permission)
+        self._audit("SYSTEM", "PERMISSION_GRANTED", "ROLE", role, {"permission": permission})
         return {"role": role, "permission": permission, "action": "granted"}
 
     def revoke_role_permission(self, role: str, permission: str) -> dict | str:
@@ -989,6 +1060,7 @@ class MultiUserWalletLedger:
             self.role_permission_overrides[role] = [str(p) for p in ROLE_PERMISSIONS.get(role, set())]
         if permission in self.role_permission_overrides[role]:
             self.role_permission_overrides[role].remove(permission)
+        self._audit("SYSTEM", "PERMISSION_REVOKED", "ROLE", role, {"permission": permission})
         return {"role": role, "permission": permission, "action": "revoked"}
 
     def grant_user_permission(self, user_id: str, permission: str) -> dict | str:
@@ -1036,12 +1108,14 @@ class MultiUserWalletLedger:
         if wallet_id not in self.wallets:
             return f"Error: wallet {wallet_id} no existe."
         self.wallets[wallet_id].frozen = True
+        self._audit("SYSTEM", "WALLET_FROZEN", "WALLET", wallet_id)
         return {"wallet_id": wallet_id, "frozen": True, "message": f"Wallet {wallet_id} congelada."}
 
     def unfreeze_wallet(self, wallet_id: str) -> dict | str:
         if wallet_id not in self.wallets:
             return f"Error: wallet {wallet_id} no existe."
         self.wallets[wallet_id].frozen = False
+        self._audit("SYSTEM", "WALLET_UNFROZEN", "WALLET", wallet_id)
         return {"wallet_id": wallet_id, "frozen": False, "message": f"Wallet {wallet_id} descongelada."}
 
     def is_wallet_frozen(self, wallet_id: str) -> bool:
@@ -1058,6 +1132,7 @@ class MultiUserWalletLedger:
         for wid in self.user_wallets.get(user_id, []):
             self.wallets[wid].frozen = True
             frozen_wallets.append(wid)
+        self._audit("SYSTEM", "USER_BANNED", "USER", user_id, {"frozen_wallets": frozen_wallets})
         return {"user_id": user_id, "banned": True, "frozen_wallets": frozen_wallets, "message": f"Usuario {user_id} baneado. {len(frozen_wallets)} wallet(s) congelada(s)."}
 
     def unban_user(self, user_id: str, unfreeze_wallets: bool = True) -> dict | str:
@@ -1069,11 +1144,175 @@ class MultiUserWalletLedger:
             for wid in self.user_wallets.get(user_id, []):
                 self.wallets[wid].frozen = False
                 unfrozen_wallets.append(wid)
+        self._audit("SYSTEM", "USER_UNBANNED", "USER", user_id, {"unfrozen_wallets": unfrozen_wallets})
         return {"user_id": user_id, "banned": False, "unfrozen_wallets": unfrozen_wallets, "message": f"Usuario {user_id} desbaneado. {len(unfrozen_wallets)} wallet(s) descongelada(s)."}
 
     def is_user_banned(self, user_id: str) -> bool:
         user = self.users.get(user_id)
         return user.banned if user else False
+
+    def is_user_deleted(self, user_id: str) -> bool:
+        user = self.users.get(user_id)
+        return bool(user.deleted_at) if user else False
+
+    # ── User management (ADMIN) ──────────────────────────
+
+    def update_user(self, user_id: str, new_user_id: str | None = None, new_display_name: str | None = None) -> dict | str:
+        if user_id not in self.users:
+            return f"Error: usuario {user_id} no existe."
+        if user_id == TREASURY_USER_ID:
+            return "Error: no se puede modificar al usuario de tesoreria."
+        user = self.users[user_id]
+        changes = {}
+        if new_display_name and new_display_name != user.display_name:
+            user.display_name = new_display_name
+            changes["display_name"] = new_display_name
+        if new_user_id and new_user_id != user_id:
+            if new_user_id in self.users:
+                return f"Error: el user_id {new_user_id} ya esta en uso."
+            if new_user_id == TREASURY_USER_ID:
+                return "Error: el identificador __TREASURY__ esta reservado."
+            user.user_id = new_user_id
+            self.users[new_user_id] = self.users.pop(user_id)
+            self.user_wallets[new_user_id] = self.user_wallets.pop(user_id, [])
+            if user_id in self.user_policies:
+                self.user_policies[new_user_id] = self.user_policies.pop(user_id)
+                self.user_policies[new_user_id].user_id = new_user_id
+            if user_id in self.user_risk_profiles:
+                self.user_risk_profiles[new_user_id] = self.user_risk_profiles.pop(user_id)
+                self.user_risk_profiles[new_user_id].user_id = new_user_id
+            if user_id in self.user_roles:
+                self.user_roles[new_user_id] = self.user_roles.pop(user_id)
+            if user_id in self.user_credentials:
+                cred = self.user_credentials.pop(user_id)
+                cred["user_id"] = new_user_id
+                self.user_credentials[new_user_id] = cred
+            if user_id in self.activation_codes:
+                ac = self.activation_codes.pop(user_id)
+                ac["user_id"] = new_user_id
+                self.activation_codes[new_user_id] = ac
+            if user_id in self.user_permission_overrides:
+                self.user_permission_overrides[new_user_id] = self.user_permission_overrides.pop(user_id)
+            for wid in self.user_wallets.get(new_user_id, []):
+                if wid in self.wallets:
+                    self.wallets[wid].user_id = new_user_id
+            changes["user_id"] = {"old": user_id, "new": new_user_id}
+        if not changes:
+            return "Error: no se especificaron cambios."
+        user.updated_at = self._timestamp()
+        self._audit("SYSTEM", "USER_UPDATED", "USER", user.user_id, changes)
+        return {"user_id": user.user_id, "changes": changes, "message": f"Usuario actualizado."}
+
+    def update_profile(self, user_id: str, first_name: str | None = None, last_name: str | None = None, email: str | None = None, username: str | None = None) -> dict | str:
+        if user_id not in self.users:
+            return f"Error: usuario {user_id} no existe."
+        user = self.users[user_id]
+        changes = {}
+        if first_name is not None and first_name != user.first_name:
+            user.first_name = first_name.strip()
+            changes["first_name"] = user.first_name
+        if last_name is not None and last_name != user.last_name:
+            user.last_name = last_name.strip()
+            changes["last_name"] = user.last_name
+        if email is not None and email != user.email:
+            user.email = email.strip()
+            changes["email"] = user.email
+        if username is not None and username != user.username:
+            user.username = username.strip()
+            changes["username"] = user.username
+        if not changes:
+            return "Error: no se especificaron cambios."
+        user.updated_at = self._timestamp()
+        self._audit("SYSTEM", "USER_UPDATED", "USER", user_id, {"profile_changes": changes})
+        return {"user_id": user_id, "changes": changes, "message": "Perfil actualizado."}
+
+    def delete_user(self, user_id: str) -> dict | str:
+        if user_id not in self.users:
+            return f"Error: usuario {user_id} no existe."
+        if user_id == TREASURY_USER_ID:
+            return "Error: no se puede eliminar al usuario de tesoreria."
+        user = self.users[user_id]
+        if user.deleted_at:
+            return f"Error: usuario {user_id} ya esta eliminado."
+        user.deleted_at = self._timestamp()
+        user.updated_at = self._timestamp()
+        frozen_wallets = []
+        for wid in self.user_wallets.get(user_id, []):
+            self.wallets[wid].frozen = True
+            frozen_wallets.append(wid)
+        self._audit("SYSTEM", "USER_DELETED", "USER", user_id)
+        return {"user_id": user_id, "deleted_at": user.deleted_at, "frozen_wallets": frozen_wallets, "message": f"Usuario {user_id} eliminado (soft delete)."}
+
+    def restore_user(self, user_id: str, unfreeze_wallets: bool = True) -> dict | str:
+        if user_id not in self.users:
+            return f"Error: usuario {user_id} no existe."
+        user = self.users[user_id]
+        if not user.deleted_at:
+            return f"Error: usuario {user_id} no esta eliminado."
+        user.deleted_at = ""
+        user.updated_at = self._timestamp()
+        unfrozen = []
+        if unfreeze_wallets:
+            for wid in self.user_wallets.get(user_id, []):
+                self.wallets[wid].frozen = False
+                unfrozen.append(wid)
+        self._audit("SYSTEM", "USER_RESTORED", "USER", user_id)
+        return {"user_id": user_id, "unfrozen_wallets": unfrozen, "message": f"Usuario {user_id} restaurado."}
+
+    # ── Password management ──────────────────────────────
+
+    def generate_temp_password_for_user(self, user_id: str) -> dict | str:
+        if user_id not in self.users:
+            return f"Error: usuario {user_id} no existe."
+        cred = self.user_credentials.get(user_id)
+        if not cred:
+            return f"Error: usuario {user_id} no tiene credenciales."
+        from domain.auth import generate_temp_password, generate_temp_token, hash_password
+        temp_pass = generate_temp_password()
+        temp_token = generate_temp_token()
+        cred["password_hash"] = hash_password(temp_pass)
+        cred["password_temp"] = True
+        cred["token_temp"] = temp_token
+        cred["updated_at"] = self._timestamp()
+        self._audit("SYSTEM", "PASSWORD_TEMP_GENERATED", "USER", user_id)
+        return {"user_id": user_id, "temp_password": temp_pass, "token_temp": temp_token, "message": f"Password temporal generado para {user_id}. Entregar al usuario."}
+
+    def change_password(self, user_id: str, current_password: str, new_password: str) -> dict | str:
+        if user_id not in self.users:
+            return f"Error: usuario {user_id} no existe."
+        cred = self.user_credentials.get(user_id)
+        if not cred:
+            return f"Error: usuario {user_id} no tiene credenciales."
+        from domain.auth import verify_password, hash_password
+        if not verify_password(current_password, cred["password_hash"]):
+            return "Error: password actual incorrecto."
+        if len(new_password) < 4:
+            return "Error: el nuevo password debe tener al menos 4 caracteres."
+        cred["password_hash"] = hash_password(new_password)
+        cred["password_temp"] = False
+        cred["token_temp"] = ""
+        cred["updated_at"] = self._timestamp()
+        self._audit(user_id, "PASSWORD_CHANGED", "USER", user_id)
+        return {"user_id": user_id, "message": "Password actualizado exitosamente."}
+
+    def reset_password_with_token(self, user_id: str, token_temp: str, new_password: str) -> dict | str:
+        if user_id not in self.users:
+            return f"Error: usuario {user_id} no existe."
+        cred = self.user_credentials.get(user_id)
+        if not cred:
+            return f"Error: usuario {user_id} no tiene credenciales."
+        stored_token = cred.get("token_temp", "")
+        if not stored_token or stored_token != token_temp:
+            return "Error: token temporal invalido o ya utilizado."
+        if len(new_password) < 4:
+            return "Error: el nuevo password debe tener al menos 4 caracteres."
+        from domain.auth import hash_password
+        cred["password_hash"] = hash_password(new_password)
+        cred["password_temp"] = False
+        cred["token_temp"] = ""
+        cred["updated_at"] = self._timestamp()
+        self._audit(user_id, "PASSWORD_CHANGED", "USER", user_id, {"method": "token_temp"})
+        return {"user_id": user_id, "message": "Password restablecido exitosamente con token temporal."}
 
     # ── Transfer ─────────────────────────────────────────
 
@@ -1265,6 +1504,7 @@ class MultiUserWalletLedger:
         transfer_record.update(exchange_metadata)
         self.transfers.append(transfer_record)
         self.wallet_nonces[sender_wallet] = transfer_nonce
+        self._audit(sender.user_id, "EXCHANGE" if is_cross_currency else "TRANSFER", "WALLET", sender_wallet, {"receiver": receiver_wallet, "amount": str(transfer_amount)})
 
         if (
             sender_risk_profile.transfer_alert_threshold is not None
@@ -1326,6 +1566,12 @@ class MultiUserWalletLedger:
                 "created_at": user.created_at,
                 "wallet_ids": list(self.user_wallets.get(user.user_id, [])),
                 "banned": user.banned,
+                "updated_at": user.updated_at,
+                "deleted_at": user.deleted_at,
+                "first_name": user.first_name,
+                "last_name": user.last_name,
+                "email": user.email,
+                "username": user.username,
             }
             for user in self.users.values()
         ]
@@ -1365,7 +1611,7 @@ class MultiUserWalletLedger:
             "transfers": list(self.transfers),
             "alerts": list(self.alerts),
             "credentials": [
-                {"user_id": uid, "password_hash": c["password_hash"], "created_at": c.get("created_at", ""), "updated_at": c.get("updated_at", "")}
+                {"user_id": uid, "password_hash": c["password_hash"], "created_at": c.get("created_at", ""), "updated_at": c.get("updated_at", ""), "password_temp": c.get("password_temp", False), "token_temp": c.get("token_temp", "")}
                 for uid, c in self.user_credentials.items()
             ],
             "roles": [
@@ -1378,6 +1624,7 @@ class MultiUserWalletLedger:
             "exchange_rates": list(self.exchange_rates.values()),
             "role_permission_overrides": {k: list(v) for k, v in self.role_permission_overrides.items()},
             "user_permission_overrides": {k: list(v) for k, v in self.user_permission_overrides.items()},
+            "audit_log": list(self.audit_log),
         }
 
     @classmethod
@@ -1393,6 +1640,12 @@ class MultiUserWalletLedger:
                 display_name=str(user.get("display_name", user_id)),
                 created_at=str(user.get("created_at", cls._timestamp())),
                 banned=bool(user.get("banned", False)),
+                updated_at=str(user.get("updated_at", "")),
+                deleted_at=str(user.get("deleted_at", "")),
+                first_name=str(user.get("first_name", "")),
+                last_name=str(user.get("last_name", "")),
+                email=str(user.get("email", "")),
+                username=str(user.get("username", "")),
             )
             ledger.user_wallets[user_id] = []
 
@@ -1562,6 +1815,8 @@ class MultiUserWalletLedger:
                     "password_hash": str(cred.get("password_hash", "")),
                     "created_at": str(cred.get("created_at", cls._timestamp())),
                     "updated_at": str(cred.get("updated_at", "")),
+                    "password_temp": bool(cred.get("password_temp", False)),
+                    "token_temp": str(cred.get("token_temp", "")),
                 }
 
         for role_rec in snapshot.get("roles", []):
@@ -1605,5 +1860,18 @@ class MultiUserWalletLedger:
 
         for uid, perms in snapshot.get("user_permission_overrides", {}).items():
             ledger.user_permission_overrides[uid] = list(perms)
+
+        ledger.audit_log = list(snapshot.get("audit_log", []))
+
+        max_seq = 0
+        for uid in ledger.users:
+            if uid.startswith("USR-"):
+                try:
+                    seq = int(uid.split("-", 1)[1])
+                    if seq > max_seq:
+                        max_seq = seq
+                except (ValueError, IndexError):
+                    pass
+        ledger._user_seq = max_seq
 
         return ledger
