@@ -119,7 +119,7 @@ def _print_banner() -> None:
         " ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝╚═╝  ╚══╝╚══════╝ ",
         "",
         " ₿  B L O C K C H A I N   W A L L E T   S Y S T E M",
-        " ── Multiuser Terminal v2.3 ──",
+        " ── Multiuser Terminal v2.5 ──",
     ]
 
     max_lines = max(len(btc), len(title))
