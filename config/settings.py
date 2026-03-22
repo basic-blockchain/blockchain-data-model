@@ -39,6 +39,9 @@ class Settings:
     pg_dsn: str
     pg_pool_min: int
     pg_pool_max: int
+    jwt_secret: str
+    jwt_ttl_seconds: int
+    bcrypt_rounds: int
 
 
 def get_settings() -> Settings:
@@ -48,4 +51,7 @@ def get_settings() -> Settings:
         pg_dsn=os.environ.get("DATABASE_URL", ""),
         pg_pool_min=int(os.environ.get("PG_POOL_MIN", "1")),
         pg_pool_max=int(os.environ.get("PG_POOL_MAX", "5")),
+        jwt_secret=os.environ.get("JWT_SECRET", ""),
+        jwt_ttl_seconds=int(os.environ.get("JWT_TTL_SECONDS", "3600")),
+        bcrypt_rounds=int(os.environ.get("BCRYPT_ROUNDS", "12")),
     )
