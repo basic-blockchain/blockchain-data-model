@@ -331,6 +331,16 @@ def main() -> None:
     cmd_list_alerts.add_argument("--severity", default="")
     cmd_list_alerts.add_argument("--limit", type=int, default=50)
 
+    cmd_set_exchange_rate = subparsers.add_parser("set-exchange-rate", help="Set exchange rate between two currencies (ADMIN only)")
+    _add_json_flag(cmd_set_exchange_rate)
+    cmd_set_exchange_rate.add_argument("--from-currency", required=True)
+    cmd_set_exchange_rate.add_argument("--to-currency", required=True)
+    cmd_set_exchange_rate.add_argument("--rate", required=True)
+    cmd_set_exchange_rate.add_argument("--commission", default="1.0")
+
+    cmd_list_exchange_rates = subparsers.add_parser("list-exchange-rates", help="List all configured exchange rates")
+    _add_json_flag(cmd_list_exchange_rates)
+
     cmd_verify_integrity = subparsers.add_parser(
         "verify-integrity",
         help="Verify transfer nonce and hash-chain integrity",
@@ -420,6 +430,15 @@ def main() -> None:
             _require_auth(Permission.TRANSFER)
             result = ledger.transfer(args.from_wallet, args.to_wallet, args.amount, fee=args.fee, reference=args.reference, sender_token=args.sender_token, expected_nonce=getattr(args, "expected_nonce", None))
             mutate = True
+
+        # ── Exchange commands ──
+        elif args.command == "set-exchange-rate":
+            _require_auth(Permission.SET_EXCHANGE_RATE)
+            result = ledger.set_exchange_rate(args.from_currency, args.to_currency, args.rate, commission_pct=args.commission)
+            mutate = True
+        elif args.command == "list-exchange-rates":
+            _require_auth(Permission.EXCHANGE)
+            result = ledger.list_exchange_rates()
 
         # ── Admin commands (ADMIN only) ──
         elif args.command == "set-policy":
