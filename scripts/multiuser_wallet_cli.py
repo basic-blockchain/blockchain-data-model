@@ -213,16 +213,22 @@ def main() -> None:
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    cmd_register = subparsers.add_parser("register", help="Register a new user (first user becomes ADMIN)")
+    cmd_register = subparsers.add_parser("register", help="Register a new user with role selection")
     _add_json_flag(cmd_register)
     cmd_register.add_argument("--user-id", required=True)
     cmd_register.add_argument("--display-name", required=True)
     cmd_register.add_argument("--password", required=True)
+    cmd_register.add_argument("--role", default="", choices=["ADMIN", "OPERATOR", "VIEWER", "admin", "operator", "viewer", ""])
+    cmd_register.add_argument("--invitation-token", default="")
 
     cmd_login = subparsers.add_parser("login", help="Authenticate and obtain a JWT token")
     _add_json_flag(cmd_login)
     cmd_login.add_argument("--user-id", required=True)
     cmd_login.add_argument("--password", required=True)
+    cmd_login.add_argument("--activation-code", default="")
+
+    cmd_gen_admin = subparsers.add_parser("generate-admin-token", help="Generate an invitation token for new ADMIN (ADMIN only)")
+    _add_json_flag(cmd_gen_admin)
 
     cmd_assign_role = subparsers.add_parser("assign-role", help="Assign a role to a user (ADMIN only)")
     _add_json_flag(cmd_assign_role)
@@ -269,9 +275,9 @@ def main() -> None:
     cmd_transfer.add_argument("--sender-token", default="")
     cmd_transfer.add_argument("--expected-nonce", type=int)
 
-    cmd_balance = subparsers.add_parser("balance", help="Get wallet balance")
+    cmd_balance = subparsers.add_parser("balance", help="Get wallet balance (omit --wallet-id to see all your wallets)")
     _add_json_flag(cmd_balance)
-    cmd_balance.add_argument("--wallet-id", required=True)
+    cmd_balance.add_argument("--wallet-id", default="")
 
     cmd_users = subparsers.add_parser("list-users", help="List all users")
     _add_json_flag(cmd_users)
@@ -362,16 +368,27 @@ def main() -> None:
         # ── Auth commands (no token required) ──
         if args.command == "register":
             is_bootstrap = ledger.is_empty()
-            result = ledger.create_user(args.user_id, args.display_name, password=args.password)
-            if is_bootstrap and not (isinstance(result, str) and result.startswith("Error")):
-                ledger.assign_role(args.user_id, "ADMIN")
-                result = {"message": result, "bootstrap": True, "role": "ADMIN", "user_id": args.user_id}
+            role = (args.role or "").upper()
+            if is_bootstrap:
+                result = ledger.create_user(args.user_id, args.display_name, password=args.password)
+                if not (isinstance(result, str) and result.startswith("Error")):
+                    ledger.assign_role(args.user_id, "ADMIN")
+                    result = {"message": result if isinstance(result, str) else result.get("message", ""), "bootstrap": True, "role": "ADMIN", "user_id": args.user_id}
+            else:
+                result = ledger.create_user(args.user_id, args.display_name, password=args.password, role=role, invitation_token=args.invitation_token)
             mutate = True
         elif args.command == "login":
             if not settings.jwt_secret:
                 result = "Error: JWT_SECRET no configurado en el entorno."
             else:
-                result = ledger.login(args.user_id, args.password, settings.jwt_secret, settings.jwt_ttl_seconds)
+                result = ledger.login(args.user_id, args.password, settings.jwt_secret, settings.jwt_ttl_seconds, activation_code=args.activation_code)
+                if isinstance(result, dict):
+                    mutate = True
+        elif args.command == "generate-admin-token":
+            payload = _require_auth(Permission.ASSIGN_ROLE)
+            caller_id = payload.get("sub", "")
+            result = ledger.generate_admin_invitation(caller_id)
+            mutate = True
 
         # ── Admin-only commands ──
         elif args.command == "create-user":
@@ -418,8 +435,14 @@ def main() -> None:
 
         # ── Viewer commands (any authenticated user) ──
         elif args.command == "balance":
-            _require_auth(Permission.VIEW_WALLETS)
-            result = {"wallet_id": args.wallet_id, "balance": str(ledger.get_wallet_balance(args.wallet_id))}
+            payload = _require_auth(Permission.VIEW_WALLETS)
+            wallet_id = args.wallet_id
+            if not wallet_id:
+                caller_id = payload.get("sub", "")
+                user_wallets = ledger.list_wallets(user_id=caller_id)
+                result = [{"wallet_id": w["wallet_id"], "model": w["model"], "currency": w["currency"], "balance": w["balance"]} for w in user_wallets]
+            else:
+                result = {"wallet_id": wallet_id, "balance": str(ledger.get_wallet_balance(wallet_id))}
         elif args.command == "list-users":
             _require_auth(Permission.VIEW_USERS)
             result = ledger.list_users()
