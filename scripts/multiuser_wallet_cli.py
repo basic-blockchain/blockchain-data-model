@@ -209,13 +209,36 @@ def main() -> None:
     parser = CliArgumentParser(description="Multi-user wallet ledger CLI")
     parser.add_argument("--store-file", default=str(DEFAULT_STORE), help="Path to the JSON ledger store")
     parser.add_argument("--json", action="store_true", help="JSON output mode")
+    parser.add_argument("--token", default="", help="JWT token for authenticated operations")
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    cmd_user = subparsers.add_parser("create-user", help="Create a user")
+    cmd_register = subparsers.add_parser("register", help="Register a new user (first user becomes ADMIN)")
+    _add_json_flag(cmd_register)
+    cmd_register.add_argument("--user-id", required=True)
+    cmd_register.add_argument("--display-name", required=True)
+    cmd_register.add_argument("--password", required=True)
+
+    cmd_login = subparsers.add_parser("login", help="Authenticate and obtain a JWT token")
+    _add_json_flag(cmd_login)
+    cmd_login.add_argument("--user-id", required=True)
+    cmd_login.add_argument("--password", required=True)
+
+    cmd_assign_role = subparsers.add_parser("assign-role", help="Assign a role to a user (ADMIN only)")
+    _add_json_flag(cmd_assign_role)
+    cmd_assign_role.add_argument("--user-id", required=True)
+    cmd_assign_role.add_argument("--role", required=True, choices=["ADMIN", "OPERATOR", "VIEWER"])
+
+    cmd_remove_role = subparsers.add_parser("remove-role", help="Remove a role from a user (ADMIN only)")
+    _add_json_flag(cmd_remove_role)
+    cmd_remove_role.add_argument("--user-id", required=True)
+    cmd_remove_role.add_argument("--role", required=True, choices=["ADMIN", "OPERATOR", "VIEWER"])
+
+    cmd_user = subparsers.add_parser("create-user", help="Create a user (ADMIN only)")
     _add_json_flag(cmd_user)
     cmd_user.add_argument("--user-id", required=True)
     cmd_user.add_argument("--display-name", required=True)
+    cmd_user.add_argument("--password", default="")
 
     cmd_wallet = subparsers.add_parser("create-wallet", help="Create a wallet for an existing user")
     _add_json_flag(cmd_wallet)
@@ -311,93 +334,124 @@ def main() -> None:
     args = parser.parse_args()
     store_file = Path(args.store_file)
     output_json = bool(args.json or getattr(args, "cmd_json", False))
+    jwt_token = args.token
 
     try:
         store, ledger = _load_ledger(store_file)
 
+        from config.settings import get_settings
+        from domain.auth import decode_jwt, has_permission, Permission
+
+        settings = get_settings()
+
+        def _require_auth(permission: str) -> dict:
+            """Validate JWT and check permission. Returns decoded payload or exits."""
+            if not jwt_token:
+                raise PermissionError(f"Se requiere --token para esta operacion ({permission}).")
+            if not settings.jwt_secret:
+                raise PermissionError("JWT_SECRET no configurado en el entorno.")
+            payload = decode_jwt(jwt_token, settings.jwt_secret)
+            roles = payload.get("roles", [])
+            if not has_permission(roles, permission):
+                raise PermissionError(f"Permiso denegado. Se requiere: {permission}. Roles actuales: {roles}")
+            return payload
+
         mutate = False
         result: dict | list | str
 
-        if args.command == "create-user":
-            result = ledger.create_user(args.user_id, args.display_name)
+        # ── Auth commands (no token required) ──
+        if args.command == "register":
+            is_bootstrap = ledger.is_empty()
+            result = ledger.create_user(args.user_id, args.display_name, password=args.password)
+            if is_bootstrap and not (isinstance(result, str) and result.startswith("Error")):
+                ledger.assign_role(args.user_id, "ADMIN")
+                result = {"message": result, "bootstrap": True, "role": "ADMIN", "user_id": args.user_id}
             mutate = True
+        elif args.command == "login":
+            if not settings.jwt_secret:
+                result = "Error: JWT_SECRET no configurado en el entorno."
+            else:
+                result = ledger.login(args.user_id, args.password, settings.jwt_secret, settings.jwt_ttl_seconds)
+
+        # ── Admin-only commands ──
+        elif args.command == "create-user":
+            _require_auth(Permission.CREATE_USER)
+            result = ledger.create_user(args.user_id, args.display_name, password=getattr(args, "password", ""))
+            mutate = True
+        elif args.command == "assign-role":
+            _require_auth(Permission.ASSIGN_ROLE)
+            result = ledger.assign_role(args.user_id, args.role)
+            mutate = True
+        elif args.command == "remove-role":
+            _require_auth(Permission.ASSIGN_ROLE)
+            result = ledger.remove_role(args.user_id, args.role)
+            mutate = True
+        # ── Operator commands (OPERATOR+) ──
         elif args.command == "create-wallet":
-            result = ledger.create_wallet(
-                args.user_id,
-                wallet_id=args.wallet_id,
-                currency=args.currency,
-                model=args.model,
-            )
+            _require_auth(Permission.CREATE_WALLET)
+            result = ledger.create_wallet(args.user_id, wallet_id=args.wallet_id, currency=args.currency, model=args.model)
             mutate = True
         elif args.command == "refresh-token":
-            result = ledger.refresh_wallet_token(
-                args.user_id,
-                args.wallet_id,
-                current_token=args.current_token,
-            )
+            _require_auth(Permission.VIEW_WALLETS)
+            result = ledger.refresh_wallet_token(args.user_id, args.wallet_id, current_token=args.current_token)
             mutate = True
         elif args.command == "mint":
+            _require_auth(Permission.MINT)
             result = ledger.mint(args.wallet_id, args.amount, reference=args.reference)
             mutate = True
         elif args.command == "transfer":
-            result = ledger.transfer(
-                args.from_wallet,
-                args.to_wallet,
-                args.amount,
-                fee=args.fee,
-                reference=args.reference,
-                sender_token=args.sender_token,
-                expected_nonce=getattr(args, "expected_nonce", None),
-            )
+            _require_auth(Permission.TRANSFER)
+            result = ledger.transfer(args.from_wallet, args.to_wallet, args.amount, fee=args.fee, reference=args.reference, sender_token=args.sender_token, expected_nonce=getattr(args, "expected_nonce", None))
             mutate = True
-        elif args.command == "balance":
-            result = {
-                "wallet_id": args.wallet_id,
-                "balance": str(ledger.get_wallet_balance(args.wallet_id)),
-            }
-        elif args.command == "list-users":
-            result = ledger.list_users()
-        elif args.command == "list-wallets":
-            result = ledger.list_wallets(user_id=args.user_id)
-        elif args.command == "list-utxos":
-            result = ledger.list_utxos(wallet_id=args.wallet_id)
-        elif args.command == "snapshot":
-            result = ledger.state_snapshot()
-        elif args.command == "list-revisions":
-            result = store.list_revisions(limit=args.limit)
+
+        # ── Admin commands (ADMIN only) ──
         elif args.command == "set-policy":
+            _require_auth(Permission.SET_POLICY)
             can_transfer = args.can_transfer if hasattr(args, "can_transfer") else None
             daily_limit = args.daily_limit if getattr(args, "daily_limit", None) is not None else None
-            result = ledger.set_user_policy(
-                args.user_id,
-                can_transfer=can_transfer,
-                daily_limit=daily_limit,
-            )
+            result = ledger.set_user_policy(args.user_id, can_transfer=can_transfer, daily_limit=daily_limit)
             mutate = True
+        elif args.command == "set-risk-profile":
+            _require_auth(Permission.SET_RISK_PROFILE)
+            result = ledger.set_user_risk_profile(args.user_id, profile_name=getattr(args, "profile_name", None), daily_limit=getattr(args, "daily_limit", None), transfer_alert_threshold=getattr(args, "transfer_alert_threshold", None), daily_alert_threshold=getattr(args, "daily_alert_threshold", None))
+            mutate = True
+
+        # ── Viewer commands (any authenticated user) ──
+        elif args.command == "balance":
+            _require_auth(Permission.VIEW_WALLETS)
+            result = {"wallet_id": args.wallet_id, "balance": str(ledger.get_wallet_balance(args.wallet_id))}
+        elif args.command == "list-users":
+            _require_auth(Permission.VIEW_USERS)
+            result = ledger.list_users()
+        elif args.command == "list-wallets":
+            _require_auth(Permission.VIEW_WALLETS)
+            result = ledger.list_wallets(user_id=args.user_id)
+        elif args.command == "list-utxos":
+            _require_auth(Permission.VIEW_WALLETS)
+            result = ledger.list_utxos(wallet_id=args.wallet_id)
+        elif args.command == "snapshot":
+            _require_auth(Permission.VIEW_WALLETS)
+            result = ledger.state_snapshot()
+        elif args.command == "list-revisions":
+            _require_auth(Permission.VIEW_REVISIONS)
+            result = store.list_revisions(limit=args.limit)
         elif args.command == "get-policy":
+            _require_auth(Permission.VIEW_POLICIES)
             result = ledger.get_user_policy(args.user_id)
         elif args.command == "list-policies":
+            _require_auth(Permission.VIEW_POLICIES)
             result = ledger.list_user_policies()
-        elif args.command == "set-risk-profile":
-            result = ledger.set_user_risk_profile(
-                args.user_id,
-                profile_name=getattr(args, "profile_name", None),
-                daily_limit=getattr(args, "daily_limit", None),
-                transfer_alert_threshold=getattr(args, "transfer_alert_threshold", None),
-                daily_alert_threshold=getattr(args, "daily_alert_threshold", None),
-            )
-            mutate = True
         elif args.command == "get-risk-profile":
+            _require_auth(Permission.VIEW_RISK_PROFILES)
             result = ledger.get_user_risk_profile(args.user_id)
         elif args.command == "list-risk-profiles":
+            _require_auth(Permission.VIEW_RISK_PROFILES)
             result = ledger.list_user_risk_profiles()
         elif args.command == "list-alerts":
-            result = ledger.list_alerts(
-                limit=args.limit,
-                user_id=args.user_id,
-                severity=args.severity,
-            )
+            _require_auth(Permission.VIEW_ALERTS)
+            result = ledger.list_alerts(limit=args.limit, user_id=args.user_id, severity=args.severity)
         elif args.command == "verify-integrity":
+            _require_auth(Permission.VIEW_WALLETS)
             result = ledger.verify_transfer_integrity()
         else:
             result = "Error: command no soportado."
