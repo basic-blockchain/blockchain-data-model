@@ -173,6 +173,24 @@ ADMIN_MENU = [
         ("8", "snapshot", "Exportar estado completo del ledger"),
         ("21", "list-revisions", "Historial de revisiones del ledger"),
     ]),
+    ("EXCHANGE", [
+        ("23", "set-exchange-rate", "Configurar tasa de conversion"),
+        ("24", "list-exchange-rates", "Ver tasas de conversion"),
+    ]),
+    ("TESORERIA", [
+        ("25", "create-treasury-wallet", "Crear wallet de tesoreria"),
+        ("26", "list-treasury-wallets", "Ver wallets de tesoreria"),
+        ("27", "top-up", "Recargar wallet desde tesoreria"),
+    ]),
+    ("PERMISOS", [
+        ("28", "grant-permission", "Otorgar permiso a rol"),
+        ("29", "revoke-permission", "Revocar permiso de rol"),
+        ("30", "grant-user-permission", "Otorgar permiso a usuario"),
+        ("31", "revoke-user-permission", "Revocar permiso de usuario"),
+        ("32", "list-role-permissions", "Ver permisos de un rol"),
+        ("33", "list-user-permissions", "Ver permisos de un usuario"),
+        ("34", "reset-role-permissions", "Resetear permisos de un rol"),
+    ]),
     ("SISTEMA", [
         ("22", "generate-admin-token", "Generar token de invitacion ADMIN"),
         ("11", "dashboard", "Metricas de sesion y rendimiento"),
@@ -190,6 +208,9 @@ OPERATOR_MENU = [
         ("3", "mint", "Emitir tokens"),
         ("4", "transfer", "Transferir fondos"),
         ("10", "transfer-wizard", "Asistente de transferencia"),
+    ]),
+    ("EXCHANGE", [
+        ("24", "list-exchange-rates", "Ver tasas de conversion"),
     ]),
     ("CONSULTAS", [
         ("5", "list-wallets", "Listar mis wallets"),
@@ -211,6 +232,9 @@ VIEWER_MENU = [
     ("TRANSACCIONES", [
         ("4", "transfer", "Transferir fondos"),
         ("10", "transfer-wizard", "Asistente de transferencia"),
+    ]),
+    ("EXCHANGE", [
+        ("24", "list-exchange-rates", "Ver tasas de conversion"),
     ]),
     ("CONSULTAS", [
         ("5", "list-wallets", "Listar mis wallets"),
@@ -517,6 +541,26 @@ def _run_transfer_wizard(ledger, session: SessionState):
     if fee_error:
         return fee_error, True, _measure_units(from_wallet, to_wallet, amount, fee, sender_token, expected_nonce)
 
+    # ── Exchange preview if cross-currency ──
+    sender_w = ledger.wallets.get(from_wallet)
+    receiver_w = ledger.wallets.get(to_wallet)
+    if sender_w and receiver_w and sender_w.currency != receiver_w.currency:
+        rate_info = ledger.get_exchange_rate(sender_w.currency, receiver_w.currency)
+        if rate_info:
+            from domain.exchange import convert_amount as _convert
+            from domain.multiuser_wallet_ledger import normalize_amount
+            conv = _convert(normalize_amount(amount), normalize_amount(rate_info["rate"]), Decimal(str(rate_info["commission_pct"])))
+            print()
+            print(_box_top())
+            print(_box_line(_yellow("  CONVERSION DE MONEDA")))
+            print(_box_mid())
+            print(_box_line(f"  {_dim('Origen:')}       {amount} {sender_w.currency}"))
+            print(_box_line(f"  {_dim('Tasa:')}         1 {sender_w.currency} = {rate_info['rate']} {receiver_w.currency}"))
+            print(_box_line(f"  {_dim('Bruto:')}        {conv['gross_amount']} {receiver_w.currency}"))
+            print(_box_line(f"  {_dim('Comision:')}     {conv['commission']} {receiver_w.currency} ({rate_info['commission_pct']}%)"))
+            print(_box_line(f"  {_dim('Destino:')}      {conv['net_amount']} {receiver_w.currency}"))
+            print(_box_bot())
+
     print()
     print(_box_top())
     print(_box_line(_yellow("  CONFIRMAR TRANSFERENCIA")))
@@ -663,6 +707,7 @@ def _auth_flow(store_file) -> SessionState:
             raise SystemExit(1)
         ledger.create_user(user_id, display_name, password=password)
         ledger.assign_role(user_id, "ADMIN")
+        ledger.ensure_treasury_user()
         store.save_ledger(ledger)
         _print_result_box("SUCCESS", "bootstrap", f"Usuario ADMIN '{user_id}' creado. Ahora inicia sesion.")
 
@@ -1342,6 +1387,244 @@ def _cmd_generate_admin_token(ctx: CommandContext) -> None:
     _execute_and_track(ctx, action="generate-admin-token", result=result, revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units)
 
 
+# ── Exchange handlers ────────────────────────────────────
+
+def _cmd_set_exchange_rate(ctx: CommandContext) -> None:
+    _section_header("CONFIGURAR TASA DE CONVERSION")
+    from_currency = _prompt("from_currency", hint="ej: BTC").upper()
+    to_currency = _prompt("to_currency", hint="ej: SOL").upper()
+    rate = _prompt("rate", hint="ej: 150.0")
+    commission_pct = _prompt("commission_pct", hint="porcentaje", default="1.0")
+    input_units = _measure_units(from_currency, to_currency, rate, commission_pct)
+    rate_error = _validate_numeric(rate, "rate")
+    comm_error = _validate_numeric(commission_pct, "commission_pct")
+    for err in (rate_error, comm_error):
+        if err:
+            _print_result_box("ERROR", "set-exchange-rate", err)
+            _execute_and_track(
+                ctx, action="set-exchange-rate", result=err,
+                revision_id=None, is_error=True, elapsed_ms=0.0, input_units=input_units,
+            )
+            raise _SkipCommand
+    started_at = time.perf_counter()
+    result = ctx.ledger.set_exchange_rate(from_currency, to_currency, rate, commission_pct=commission_pct)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    if isinstance(result, str) and result.startswith("Error"):
+        _print_result_box("ERROR", "set-exchange-rate", result)
+        _execute_and_track(
+            ctx, action="set-exchange-rate", result=result,
+            revision_id=None, is_error=True, elapsed_ms=elapsed_ms, input_units=input_units,
+        )
+        raise _SkipCommand
+    rev = _persist(ctx.store, ctx.ledger)
+    elapsed_ms += (time.perf_counter() - started_at) * 1000.0
+    _print_data_box("Tasa configurada", result if isinstance(result, dict) else {"resultado": result}, rev)
+    _execute_and_track(
+        ctx, action="set-exchange-rate", result=result,
+        revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
+    )
+
+
+def _cmd_list_exchange_rates(ctx: CommandContext) -> None:
+    _section_header("TASAS DE CONVERSION")
+    input_units = _measure_units("list-exchange-rates")
+    started_at = time.perf_counter()
+    result = ctx.ledger.list_exchange_rates()
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    if not result:
+        _print_result_box("SUCCESS", "list-exchange-rates", "No hay tasas configuradas.")
+    else:
+        _print_data_box(f"Tasas de conversion ({len(result)})", result)
+    _execute_and_track(
+        ctx, action="list-exchange-rates", result=result,
+        revision_id=None, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
+    )
+
+
+# ── Treasury handlers ────────────────────────────────────
+
+def _cmd_create_treasury_wallet(ctx: CommandContext) -> None:
+    _section_header("CREAR WALLET DE TESORERIA")
+    currency = _prompt("currency", default="USDX")
+    model = _prompt("model", hint="ACCOUNT | UTXO", default="ACCOUNT").upper()
+    input_units = _measure_units(currency, model)
+    started_at = time.perf_counter()
+    result = ctx.ledger.create_treasury_wallet(currency=currency, model=model)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    if _is_domain_error_result(result):
+        _print_result_box("ERROR", "create-treasury-wallet", str(result))
+        _execute_and_track(ctx, action="create-treasury-wallet", result=result, revision_id=None, is_error=True, elapsed_ms=elapsed_ms, input_units=input_units)
+        raise _SkipCommand
+    rev = _persist(ctx.store, ctx.ledger)
+    _print_data_box("Wallet de tesoreria creada", result if isinstance(result, dict) else {"resultado": result}, rev)
+    if isinstance(result, dict) and result.get("auth_token"):
+        _print_token_notice(result["auth_token"])
+    _execute_and_track(ctx, action="create-treasury-wallet", result=result, revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units)
+
+
+def _cmd_list_treasury_wallets(ctx: CommandContext) -> None:
+    _section_header("WALLETS DE TESORERIA")
+    input_units = _measure_units("list-treasury-wallets")
+    started_at = time.perf_counter()
+    result = ctx.ledger.list_treasury_wallets()
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    if not result:
+        _print_result_box("SUCCESS", "list-treasury-wallets", "No hay wallets de tesoreria creadas.")
+    else:
+        _print_data_box(f"Wallets de tesoreria ({len(result)})", result)
+    _execute_and_track(ctx, action="list-treasury-wallets", result=result, revision_id=None, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units)
+
+
+def _cmd_top_up(ctx: CommandContext) -> None:
+    _section_header("RECARGAR WALLET DESDE TESORERIA")
+    treasury_wallets = ctx.ledger.list_treasury_wallets()
+    if not treasury_wallets:
+        _print_result_box("ERROR", "top-up", "No hay wallets de tesoreria. Crea una primero con opcion [25].")
+        raise _SkipCommand
+    if len(treasury_wallets) == 1:
+        treasury_wallet_id = treasury_wallets[0]["wallet_id"]
+        print(_dim(f"  Treasury wallet: {treasury_wallet_id} ({treasury_wallets[0]['currency']})"))
+    else:
+        print()
+        print(_box_top())
+        print(_box_line(_cyan("  Wallets de tesoreria:")))
+        print(_box_mid())
+        for i, w in enumerate(treasury_wallets, 1):
+            print(_box_line(f"  {_yellow(f'[{i}]')} {w['wallet_id']}  {_dim(w['model'])}  {_bold(w['balance'])} {w['currency']}"))
+        print(_box_bot())
+        sel = _prompt("Selecciona treasury", hint=f"1-{len(treasury_wallets)}")
+        try:
+            treasury_wallet_id = treasury_wallets[int(sel) - 1]["wallet_id"]
+        except (ValueError, IndexError):
+            _print_result_box("ERROR", "top-up", "Seleccion invalida.")
+            raise _SkipCommand
+    target_wallet_id = _prompt("target_wallet_id")
+    amount = _prompt("amount")
+    reference = _prompt("reference", default="TOP_UP")
+    input_units = _measure_units(treasury_wallet_id, target_wallet_id, amount, reference)
+    amount_error = _validate_numeric(amount, "amount")
+    if amount_error:
+        _execute_and_track(ctx, action="top-up", result=amount_error, revision_id=None, is_error=True, elapsed_ms=0.0, input_units=input_units)
+        raise _SkipCommand
+    started_at = time.perf_counter()
+    result = ctx.ledger.top_up(treasury_wallet_id, target_wallet_id, amount, reference=reference)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    if _is_domain_error_result(result):
+        _print_result_box("ERROR", "top-up", str(result))
+        _execute_and_track(ctx, action="top-up", result=result, revision_id=None, is_error=True, elapsed_ms=elapsed_ms, input_units=input_units)
+        raise _SkipCommand
+    rev = _persist(ctx.store, ctx.ledger)
+    _print_data_box("Recarga ejecutada", {"resultado": result}, rev)
+    _execute_and_track(ctx, action="top-up", result=result, revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units)
+
+
+# ── Permission handlers ──────────────────────────────────
+
+def _cmd_grant_permission(ctx: CommandContext) -> None:
+    _section_header("OTORGAR PERMISO A ROL")
+    role = _prompt("role", hint="ADMIN / OPERATOR / VIEWER").upper()
+    permission = _prompt("permission").upper()
+    input_units = _measure_units(role, permission)
+    started_at = time.perf_counter()
+    result = ctx.ledger.grant_role_permission(role, permission)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    if isinstance(result, str) and result.startswith("Error"):
+        _print_result_box("ERROR", "grant-permission", result)
+        _execute_and_track(ctx, action="grant-permission", result=result, revision_id=None, is_error=True, elapsed_ms=elapsed_ms, input_units=input_units)
+        raise _SkipCommand
+    rev = _persist(ctx.store, ctx.ledger)
+    _print_data_box("Permiso otorgado", result if isinstance(result, dict) else {"resultado": result}, rev)
+    _execute_and_track(ctx, action="grant-permission", result=result, revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units)
+
+
+def _cmd_revoke_permission(ctx: CommandContext) -> None:
+    _section_header("REVOCAR PERMISO DE ROL")
+    role = _prompt("role", hint="ADMIN / OPERATOR / VIEWER").upper()
+    permission = _prompt("permission").upper()
+    input_units = _measure_units(role, permission)
+    started_at = time.perf_counter()
+    result = ctx.ledger.revoke_role_permission(role, permission)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    if isinstance(result, str) and result.startswith("Error"):
+        _print_result_box("ERROR", "revoke-permission", result)
+        _execute_and_track(ctx, action="revoke-permission", result=result, revision_id=None, is_error=True, elapsed_ms=elapsed_ms, input_units=input_units)
+        raise _SkipCommand
+    rev = _persist(ctx.store, ctx.ledger)
+    _print_data_box("Permiso revocado", result if isinstance(result, dict) else {"resultado": result}, rev)
+    _execute_and_track(ctx, action="revoke-permission", result=result, revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units)
+
+
+def _cmd_grant_user_permission(ctx: CommandContext) -> None:
+    _section_header("OTORGAR PERMISO A USUARIO")
+    user_id = _prompt("user_id")
+    permission = _prompt("permission").upper()
+    input_units = _measure_units(user_id, permission)
+    started_at = time.perf_counter()
+    result = ctx.ledger.grant_user_permission(user_id, permission)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    if isinstance(result, str) and result.startswith("Error"):
+        _print_result_box("ERROR", "grant-user-permission", result)
+        _execute_and_track(ctx, action="grant-user-permission", result=result, revision_id=None, is_error=True, elapsed_ms=elapsed_ms, input_units=input_units)
+        raise _SkipCommand
+    rev = _persist(ctx.store, ctx.ledger)
+    _print_data_box("Permiso otorgado a usuario", result if isinstance(result, dict) else {"resultado": result}, rev)
+    _execute_and_track(ctx, action="grant-user-permission", result=result, revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units)
+
+
+def _cmd_revoke_user_permission(ctx: CommandContext) -> None:
+    _section_header("REVOCAR PERMISO DE USUARIO")
+    user_id = _prompt("user_id")
+    permission = _prompt("permission").upper()
+    input_units = _measure_units(user_id, permission)
+    started_at = time.perf_counter()
+    result = ctx.ledger.revoke_user_permission(user_id, permission)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    if isinstance(result, str) and result.startswith("Error"):
+        _print_result_box("ERROR", "revoke-user-permission", result)
+        _execute_and_track(ctx, action="revoke-user-permission", result=result, revision_id=None, is_error=True, elapsed_ms=elapsed_ms, input_units=input_units)
+        raise _SkipCommand
+    rev = _persist(ctx.store, ctx.ledger)
+    _print_data_box("Permiso revocado de usuario", result if isinstance(result, dict) else {"resultado": result}, rev)
+    _execute_and_track(ctx, action="revoke-user-permission", result=result, revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units)
+
+
+def _cmd_list_role_permissions(ctx: CommandContext) -> None:
+    _section_header("VER PERMISOS DE ROL")
+    role = _prompt("role", hint="ADMIN / OPERATOR / VIEWER").upper()
+    input_units = _measure_units(role)
+    started_at = time.perf_counter()
+    result = ctx.ledger.list_role_permissions(role)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    _print_data_box(f"Permisos de {role}", result)
+    _execute_and_track(ctx, action="list-role-permissions", result=result, revision_id=None, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units)
+
+
+def _cmd_list_user_permissions(ctx: CommandContext) -> None:
+    _section_header("VER PERMISOS DE USUARIO")
+    user_id = _prompt("user_id")
+    input_units = _measure_units(user_id)
+    started_at = time.perf_counter()
+    result = ctx.ledger.list_user_permissions(user_id)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    _print_data_box(f"Permisos de {user_id}", result)
+    _execute_and_track(ctx, action="list-user-permissions", result=result, revision_id=None, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units)
+
+
+def _cmd_reset_role_permissions(ctx: CommandContext) -> None:
+    _section_header("RESETEAR PERMISOS DE ROL")
+    role = _prompt("role", hint="ADMIN / OPERATOR / VIEWER").upper()
+    if not _prompt_confirm(f"Resetear permisos de {role} a defaults?"):
+        _print_result_box("SUCCESS", "reset-role-permissions", "Cancelado por el usuario.")
+        raise _SkipCommand
+    input_units = _measure_units(role)
+    started_at = time.perf_counter()
+    result = ctx.ledger.reset_role_permissions(role)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    rev = _persist(ctx.store, ctx.ledger)
+    _print_data_box("Permisos reseteados", {"resultado": result}, rev)
+    _execute_and_track(ctx, action="reset-role-permissions", result=result, revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units)
+
+
 # ── Command handler registry ────────────────────────────
 
 from typing import Callable
@@ -1370,6 +1653,18 @@ COMMAND_HANDLERS: dict[str, tuple[Callable, str | None]] = {
     "20": (_cmd_list_alerts,          Permission.VIEW_ALERTS),
     "21": (_cmd_list_revisions,       Permission.VIEW_REVISIONS),
     "22": (_cmd_generate_admin_token, None),
+    "23": (_cmd_set_exchange_rate,       Permission.SET_EXCHANGE_RATE),
+    "24": (_cmd_list_exchange_rates,     None),
+    "25": (_cmd_create_treasury_wallet,  Permission.TOP_UP),
+    "26": (_cmd_list_treasury_wallets,   Permission.TOP_UP),
+    "27": (_cmd_top_up,                  Permission.TOP_UP),
+    "28": (_cmd_grant_permission,        Permission.MANAGE_PERMISSIONS),
+    "29": (_cmd_revoke_permission,       Permission.MANAGE_PERMISSIONS),
+    "30": (_cmd_grant_user_permission,   Permission.MANAGE_PERMISSIONS),
+    "31": (_cmd_revoke_user_permission,  Permission.MANAGE_PERMISSIONS),
+    "32": (_cmd_list_role_permissions,   Permission.MANAGE_PERMISSIONS),
+    "33": (_cmd_list_user_permissions,   Permission.MANAGE_PERMISSIONS),
+    "34": (_cmd_reset_role_permissions,  Permission.MANAGE_PERMISSIONS),
 }
 
 
@@ -1412,9 +1707,6 @@ def main() -> None:
             continue
 
         handler, required_perm = handler_entry
-        if required_perm and not has_permission(session.auth_roles, required_perm):
-            _print_result_box("ERROR", "permiso-denegado", f"Se requiere: {required_perm}. Tus roles: {', '.join(session.auth_roles) or 'ninguno'}")
-            continue
 
         try:
             store, ledger = _load(store_file)
@@ -1426,6 +1718,15 @@ def main() -> None:
                 "Ejecuta: PYTHONPATH=. py migrations/migrate.py",
             )
             break
+
+        if required_perm and not has_permission(
+            session.auth_roles, required_perm,
+            role_overrides=ledger.role_permission_overrides,
+            user_permissions=ledger.user_permission_overrides,
+            user_id=session.auth_user_id,
+        ):
+            _print_result_box("ERROR", "permiso-denegado", f"Se requiere: {required_perm}. Tus roles: {', '.join(session.auth_roles) or 'ninguno'}")
+            continue
 
         ctx = CommandContext(session=session, store=store, ledger=ledger, store_file=store_file)
         try:

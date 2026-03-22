@@ -11,6 +11,7 @@ from decimal import Decimal, ROUND_DOWN
 
 UNIT = Decimal("0.00000001")
 TOKEN_ALPHABET = string.ascii_letters + string.digits
+TREASURY_USER_ID = "__TREASURY__"
 
 
 def normalize_amount(value: Decimal | int | float | str) -> Decimal:
@@ -72,6 +73,9 @@ class MultiUserWalletLedger:
         self.user_roles: dict[str, list[str]] = {}
         self.admin_invitation_tokens: list[dict] = []
         self.activation_codes: dict[str, dict] = {}
+        self.exchange_rates: dict[str, dict] = {}
+        self.role_permission_overrides: dict[str, list[str]] = {}
+        self.user_permission_overrides: dict[str, list[str]] = {}
 
     RISK_PROFILE_DEFAULTS: dict[str, dict[str, str | None]] = {
         "STANDARD": {
@@ -222,6 +226,8 @@ class MultiUserWalletLedger:
     def create_user(self, user_id: str, display_name: str, password: str = "", role: str = "", invitation_token: str = "") -> dict | str:
         if not user_id or not display_name:
             return "Error: user_id y display_name son requeridos."
+        if user_id == TREASURY_USER_ID:
+            return "Error: el identificador __TREASURY__ esta reservado para el sistema."
         if user_id in self.users:
             return f"Aviso: el usuario {user_id} ya existe."
 
@@ -783,6 +789,241 @@ class MultiUserWalletLedger:
         )
         return f"Mint {minted} aplicado a {wallet_id}."
 
+    # ── Treasury (corporate wallet) ────────────────────────
+
+    def ensure_treasury_user(self) -> str:
+        if TREASURY_USER_ID in self.users:
+            return f"Usuario {TREASURY_USER_ID} ya existe."
+        self.users[TREASURY_USER_ID] = UserRecord(
+            user_id=TREASURY_USER_ID,
+            display_name="Tesoreria Corporativa",
+            created_at=self._timestamp(),
+        )
+        self.user_wallets[TREASURY_USER_ID] = []
+        self.user_roles[TREASURY_USER_ID] = []
+        return f"Usuario {TREASURY_USER_ID} creado."
+
+    def create_treasury_wallet(self, currency: str = "USDX", model: str = "ACCOUNT") -> dict | str:
+        self.ensure_treasury_user()
+        return self.create_wallet(TREASURY_USER_ID, currency=currency, model=model)
+
+    def list_treasury_wallets(self) -> list[dict]:
+        return self.list_wallets(user_id=TREASURY_USER_ID)
+
+    def top_up(self, treasury_wallet_id: str, target_wallet_id: str, amount: str | Decimal, reference: str = "TOP_UP") -> str:
+        top_amount = normalize_amount(amount)
+        if top_amount <= 0:
+            return "Error: amount debe ser mayor a cero."
+        if treasury_wallet_id not in self.wallets:
+            return f"Error: wallet de tesoreria {treasury_wallet_id} no existe."
+        if target_wallet_id not in self.wallets:
+            return f"Error: wallet destino {target_wallet_id} no existe."
+        if treasury_wallet_id == target_wallet_id:
+            return "Error: wallet de tesoreria y destino deben ser distintas."
+
+        treasury = self.wallets[treasury_wallet_id]
+        target = self.wallets[target_wallet_id]
+
+        if treasury.user_id != TREASURY_USER_ID:
+            return f"Error: wallet {treasury_wallet_id} no pertenece a tesoreria."
+        if treasury.model != target.model:
+            return f"Error: no se puede recargar entre modelos diferentes ({treasury.model} -> {target.model})."
+
+        is_cross_currency = treasury.currency != target.currency
+        exchange_metadata = {}
+        credit_amount = top_amount
+
+        if is_cross_currency:
+            rate_info = self.get_exchange_rate(treasury.currency, target.currency)
+            if not rate_info:
+                return f"Error: no hay tasa de conversion configurada para {treasury.currency} -> {target.currency}."
+            from domain.exchange import convert_amount as _convert
+            rate_decimal = normalize_amount(rate_info["rate"])
+            comm_decimal = Decimal(str(rate_info["commission_pct"]))
+            conversion = _convert(top_amount, rate_decimal, comm_decimal)
+            credit_amount = normalize_amount(conversion["net_amount"])
+            exchange_metadata = {
+                "sender_currency": treasury.currency,
+                "receiver_currency": target.currency,
+                "exchange_rate": conversion["rate"],
+                "exchange_commission": conversion["commission"],
+                "converted_amount": conversion["net_amount"],
+            }
+
+        if treasury.model == "ACCOUNT":
+            if treasury.balance < top_amount:
+                return f"Error: fondos insuficientes en tesoreria. Disponible={treasury.balance}, Requerido={top_amount}."
+            treasury.balance -= top_amount
+            target.balance += credit_amount
+        else:
+            selected: list[dict] = []
+            selected_total = Decimal("0")
+            for utxo in self.utxos.get(treasury_wallet_id, []):
+                if str(utxo.get("currency", "")) != treasury.currency:
+                    continue
+                selected.append(utxo)
+                selected_total += normalize_amount(utxo.get("amount", "0"))
+                if selected_total >= top_amount:
+                    break
+            if selected_total < top_amount:
+                available = self._sum_wallet_utxos(treasury_wallet_id, treasury.currency)
+                return f"Error: fondos insuficientes en tesoreria. Disponible={available}, Requerido={top_amount}."
+            consumed_ids = {str(item.get("utxo_id", "")) for item in selected}
+            self.utxos[treasury_wallet_id] = [
+                utxo for utxo in self.utxos.get(treasury_wallet_id, [])
+                if str(utxo.get("utxo_id", "")) not in consumed_ids
+            ]
+            self.utxos.setdefault(target_wallet_id, []).append({
+                "utxo_id": self._build_utxo_id(),
+                "wallet_id": target_wallet_id,
+                "currency": target.currency,
+                "amount": str(credit_amount),
+                "source": "TOP_UP",
+                "created_at": self._timestamp(),
+            })
+            change = selected_total - top_amount
+            if change > 0:
+                self.utxos.setdefault(treasury_wallet_id, []).append({
+                    "utxo_id": self._build_utxo_id(),
+                    "wallet_id": treasury_wallet_id,
+                    "currency": treasury.currency,
+                    "amount": str(change),
+                    "source": "CHANGE",
+                    "created_at": self._timestamp(),
+                })
+            self._sync_wallet_balance(treasury_wallet_id)
+            self._sync_wallet_balance(target_wallet_id)
+
+        transfer_record = {
+            "transfer_id": self._build_transfer_id(),
+            "type": "TOP_UP",
+            "sender_wallet": treasury_wallet_id,
+            "receiver_wallet": target_wallet_id,
+            "amount": str(top_amount),
+            "fee": "0.00000000",
+            "reference": reference,
+            "status": "SETTLED",
+            "created_at": self._timestamp(),
+        }
+        transfer_record.update(exchange_metadata)
+        self.transfers.append(transfer_record)
+        return f"Top-up {top_amount} de {treasury_wallet_id} a {target_wallet_id} aplicado."
+
+    # ── Exchange rate management ──────────────────────────
+
+    def set_exchange_rate(self, from_currency: str, to_currency: str, rate: str | Decimal, commission_pct: str | Decimal = "1.0") -> dict | str:
+        from domain.exchange import pair_key
+        from_c = from_currency.upper().strip()
+        to_c = to_currency.upper().strip()
+        if not from_c or not to_c:
+            return "Error: from_currency y to_currency son requeridos."
+        if from_c == to_c:
+            return "Error: las monedas deben ser diferentes."
+        rate_val = normalize_amount(rate)
+        comm_val = Decimal(str(commission_pct)).quantize(Decimal("0.01"))
+        if rate_val <= 0:
+            return "Error: rate debe ser mayor a cero."
+        if comm_val < 0:
+            return "Error: commission_pct no puede ser negativa."
+        key = pair_key(from_c, to_c)
+        self.exchange_rates[key] = {
+            "pair_id": key,
+            "from_currency": from_c,
+            "to_currency": to_c,
+            "rate": str(rate_val),
+            "commission_pct": str(comm_val),
+            "updated_at": self._timestamp(),
+        }
+        return {"pair_id": key, "from_currency": from_c, "to_currency": to_c, "rate": str(rate_val), "commission_pct": str(comm_val)}
+
+    def get_exchange_rate(self, from_currency: str, to_currency: str) -> dict | None:
+        from domain.exchange import pair_key
+        return self.exchange_rates.get(pair_key(from_currency.upper(), to_currency.upper()))
+
+    def list_exchange_rates(self) -> list[dict]:
+        return list(self.exchange_rates.values())
+
+    # ── Dynamic permission management ────────────────────
+
+    def _valid_permission(self, permission: str) -> bool:
+        from domain.auth import Permission
+        return permission in {p.value for p in Permission}
+
+    def _valid_role(self, role: str) -> bool:
+        from domain.auth import Role
+        return role in {r.value for r in Role}
+
+    def grant_role_permission(self, role: str, permission: str) -> dict | str:
+        role = role.upper()
+        permission = permission.upper()
+        if not self._valid_role(role):
+            return f"Error: rol invalido: {role}."
+        if not self._valid_permission(permission):
+            return f"Error: permiso invalido: {permission}."
+        from domain.auth import ROLE_PERMISSIONS
+        if role not in self.role_permission_overrides:
+            self.role_permission_overrides[role] = [str(p) for p in ROLE_PERMISSIONS.get(role, set())]
+        if permission not in self.role_permission_overrides[role]:
+            self.role_permission_overrides[role].append(permission)
+        return {"role": role, "permission": permission, "action": "granted"}
+
+    def revoke_role_permission(self, role: str, permission: str) -> dict | str:
+        role = role.upper()
+        permission = permission.upper()
+        if not self._valid_role(role):
+            return f"Error: rol invalido: {role}."
+        if not self._valid_permission(permission):
+            return f"Error: permiso invalido: {permission}."
+        if role == "ADMIN" and permission == "MANAGE_PERMISSIONS":
+            return "Error: no se puede revocar MANAGE_PERMISSIONS del rol ADMIN."
+        from domain.auth import ROLE_PERMISSIONS
+        if role not in self.role_permission_overrides:
+            self.role_permission_overrides[role] = [str(p) for p in ROLE_PERMISSIONS.get(role, set())]
+        if permission in self.role_permission_overrides[role]:
+            self.role_permission_overrides[role].remove(permission)
+        return {"role": role, "permission": permission, "action": "revoked"}
+
+    def grant_user_permission(self, user_id: str, permission: str) -> dict | str:
+        permission = permission.upper()
+        if user_id not in self.users:
+            return f"Error: usuario {user_id} no existe."
+        if not self._valid_permission(permission):
+            return f"Error: permiso invalido: {permission}."
+        self.user_permission_overrides.setdefault(user_id, [])
+        if permission not in self.user_permission_overrides[user_id]:
+            self.user_permission_overrides[user_id].append(permission)
+        return {"user_id": user_id, "permission": permission, "action": "granted"}
+
+    def revoke_user_permission(self, user_id: str, permission: str) -> dict | str:
+        permission = permission.upper()
+        if user_id not in self.users:
+            return f"Error: usuario {user_id} no existe."
+        if not self._valid_permission(permission):
+            return f"Error: permiso invalido: {permission}."
+        if user_id in self.user_permission_overrides and permission in self.user_permission_overrides[user_id]:
+            self.user_permission_overrides[user_id].remove(permission)
+        return {"user_id": user_id, "permission": permission, "action": "revoked"}
+
+    def reset_role_permissions(self, role: str) -> str:
+        role = role.upper()
+        if not self._valid_role(role):
+            return f"Error: rol invalido: {role}."
+        self.role_permission_overrides.pop(role, None)
+        return f"Permisos del rol {role} reseteados a defaults."
+
+    def list_role_permissions(self, role: str) -> dict:
+        role = role.upper()
+        from domain.auth import effective_permissions
+        perms = effective_permissions(role, overrides=self.role_permission_overrides)
+        has_override = role in self.role_permission_overrides
+        return {"role": role, "permissions": sorted(perms), "source": "override" if has_override else "default"}
+
+    def list_user_permissions(self, user_id: str) -> dict:
+        perms = self.user_permission_overrides.get(user_id, [])
+        return {"user_id": user_id, "permissions": sorted(perms)}
+
+    # ── Transfer ─────────────────────────────────────────
+
     def transfer(
         self,
         sender_wallet: str,
@@ -810,8 +1051,11 @@ class MultiUserWalletLedger:
         self._refresh_wallet_token_if_expired(receiver)
         if sender.model != receiver.model:
             return f"Error: no se puede transferir entre modelos diferentes ({sender.model} -> {receiver.model})."
-        if sender.currency != receiver.currency:
-            return f"Error: no se puede transferir entre monedas diferentes ({sender.currency} -> {receiver.currency}). Ambas wallets deben tener la misma moneda."
+        is_cross_currency = sender.currency != receiver.currency
+        if is_cross_currency:
+            rate_info = self.get_exchange_rate(sender.currency, receiver.currency)
+            if not rate_info:
+                return f"Error: no hay tasa de conversion configurada para {sender.currency} -> {receiver.currency}. Un ADMIN debe configurar la tasa primero."
 
         if not sender_token.strip():
             return "Error: sender_token es requerido para transferir."
@@ -851,6 +1095,22 @@ class MultiUserWalletLedger:
                 f"Actual={day_total}, Intento={transfer_amount}, Límite={effective_daily_limit}."
             )
 
+        exchange_metadata = {}
+        credit_amount = transfer_amount
+        if is_cross_currency:
+            from domain.exchange import convert_amount as _convert
+            rate_decimal = normalize_amount(rate_info["rate"])
+            comm_decimal = Decimal(str(rate_info["commission_pct"]))
+            conversion = _convert(transfer_amount, rate_decimal, comm_decimal)
+            credit_amount = normalize_amount(conversion["net_amount"])
+            exchange_metadata = {
+                "sender_currency": sender.currency,
+                "receiver_currency": receiver.currency,
+                "exchange_rate": conversion["rate"],
+                "exchange_commission": conversion["commission"],
+                "converted_amount": conversion["net_amount"],
+            }
+
         total_cost = transfer_amount + tx_fee
         if sender.model == "ACCOUNT":
             if sender.balance < total_cost:
@@ -859,7 +1119,7 @@ class MultiUserWalletLedger:
                     f"Requerido={total_cost}."
                 )
             sender.balance -= total_cost
-            receiver.balance += transfer_amount
+            receiver.balance += credit_amount
         else:
             selected: list[dict] = []
             selected_total = Decimal("0")
@@ -890,8 +1150,8 @@ class MultiUserWalletLedger:
                     "utxo_id": self._build_utxo_id(),
                     "wallet_id": receiver_wallet,
                     "currency": receiver.currency,
-                    "amount": str(transfer_amount),
-                    "source": "TRANSFER",
+                    "amount": str(credit_amount),
+                    "source": "EXCHANGE" if is_cross_currency else "TRANSFER",
                     "created_at": self._timestamp(),
                 }
             )
@@ -928,23 +1188,23 @@ class MultiUserWalletLedger:
             created_at=created_at,
             previous_hash=previous_hash,
         )
-        self.transfers.append(
-            {
-                "transfer_id": transfer_id,
-                "type": "TRANSFER",
-                "model": sender.model,
-                "sender_wallet": sender_wallet,
-                "receiver_wallet": receiver_wallet,
-                "amount": str(transfer_amount),
-                "fee": str(tx_fee),
-                "nonce": transfer_nonce,
-                "previous_hash": previous_hash,
-                "tx_hash": tx_hash,
-                "reference": reference,
-                "status": "SETTLED",
-                "created_at": created_at,
-            }
-        )
+        transfer_record = {
+            "transfer_id": transfer_id,
+            "type": "EXCHANGE" if is_cross_currency else "TRANSFER",
+            "model": sender.model,
+            "sender_wallet": sender_wallet,
+            "receiver_wallet": receiver_wallet,
+            "amount": str(transfer_amount),
+            "fee": str(tx_fee),
+            "nonce": transfer_nonce,
+            "previous_hash": previous_hash,
+            "tx_hash": tx_hash,
+            "reference": reference,
+            "status": "SETTLED",
+            "created_at": created_at,
+        }
+        transfer_record.update(exchange_metadata)
+        self.transfers.append(transfer_record)
         self.wallet_nonces[sender_wallet] = transfer_nonce
 
         if (
@@ -1054,6 +1314,9 @@ class MultiUserWalletLedger:
             ],
             "admin_invitation_tokens": list(self.admin_invitation_tokens),
             "activation_codes": list(self.activation_codes.values()),
+            "exchange_rates": list(self.exchange_rates.values()),
+            "role_permission_overrides": {k: list(v) for k, v in self.role_permission_overrides.items()},
+            "user_permission_overrides": {k: list(v) for k, v in self.user_permission_overrides.items()},
         }
 
     @classmethod
@@ -1261,5 +1524,23 @@ class MultiUserWalletLedger:
                     "activated": bool(ac.get("activated", False)),
                     "created_at": str(ac.get("created_at", cls._timestamp())),
                 }
+
+        for er in snapshot.get("exchange_rates", []):
+            key = str(er.get("pair_id", "")).strip()
+            if key:
+                ledger.exchange_rates[key] = {
+                    "pair_id": key,
+                    "from_currency": str(er.get("from_currency", "")),
+                    "to_currency": str(er.get("to_currency", "")),
+                    "rate": str(er.get("rate", "0")),
+                    "commission_pct": str(er.get("commission_pct", "1.0")),
+                    "updated_at": str(er.get("updated_at", cls._timestamp())),
+                }
+
+        for role, perms in snapshot.get("role_permission_overrides", {}).items():
+            ledger.role_permission_overrides[role] = list(perms)
+
+        for uid, perms in snapshot.get("user_permission_overrides", {}).items():
+            ledger.user_permission_overrides[uid] = list(perms)
 
         return ledger
