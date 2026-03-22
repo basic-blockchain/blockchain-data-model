@@ -72,6 +72,7 @@ class MultiUserWalletLedger:
         self.user_roles: dict[str, list[str]] = {}
         self.admin_invitation_tokens: list[dict] = []
         self.activation_codes: dict[str, dict] = {}
+        self.exchange_rates: dict[str, dict] = {}
 
     RISK_PROFILE_DEFAULTS: dict[str, dict[str, str | None]] = {
         "STANDARD": {
@@ -783,6 +784,42 @@ class MultiUserWalletLedger:
         )
         return f"Mint {minted} aplicado a {wallet_id}."
 
+    # ── Exchange rate management ──────────────────────────
+
+    def set_exchange_rate(self, from_currency: str, to_currency: str, rate: str | Decimal, commission_pct: str | Decimal = "1.0") -> dict | str:
+        from domain.exchange import pair_key
+        from_c = from_currency.upper().strip()
+        to_c = to_currency.upper().strip()
+        if not from_c or not to_c:
+            return "Error: from_currency y to_currency son requeridos."
+        if from_c == to_c:
+            return "Error: las monedas deben ser diferentes."
+        rate_val = normalize_amount(rate)
+        comm_val = Decimal(str(commission_pct)).quantize(Decimal("0.01"))
+        if rate_val <= 0:
+            return "Error: rate debe ser mayor a cero."
+        if comm_val < 0:
+            return "Error: commission_pct no puede ser negativa."
+        key = pair_key(from_c, to_c)
+        self.exchange_rates[key] = {
+            "pair_id": key,
+            "from_currency": from_c,
+            "to_currency": to_c,
+            "rate": str(rate_val),
+            "commission_pct": str(comm_val),
+            "updated_at": self._timestamp(),
+        }
+        return {"pair_id": key, "from_currency": from_c, "to_currency": to_c, "rate": str(rate_val), "commission_pct": str(comm_val)}
+
+    def get_exchange_rate(self, from_currency: str, to_currency: str) -> dict | None:
+        from domain.exchange import pair_key
+        return self.exchange_rates.get(pair_key(from_currency.upper(), to_currency.upper()))
+
+    def list_exchange_rates(self) -> list[dict]:
+        return list(self.exchange_rates.values())
+
+    # ── Transfer ─────────────────────────────────────────
+
     def transfer(
         self,
         sender_wallet: str,
@@ -810,8 +847,11 @@ class MultiUserWalletLedger:
         self._refresh_wallet_token_if_expired(receiver)
         if sender.model != receiver.model:
             return f"Error: no se puede transferir entre modelos diferentes ({sender.model} -> {receiver.model})."
-        if sender.currency != receiver.currency:
-            return f"Error: no se puede transferir entre monedas diferentes ({sender.currency} -> {receiver.currency}). Ambas wallets deben tener la misma moneda."
+        is_cross_currency = sender.currency != receiver.currency
+        if is_cross_currency:
+            rate_info = self.get_exchange_rate(sender.currency, receiver.currency)
+            if not rate_info:
+                return f"Error: no hay tasa de conversion configurada para {sender.currency} -> {receiver.currency}. Un ADMIN debe configurar la tasa primero."
 
         if not sender_token.strip():
             return "Error: sender_token es requerido para transferir."
@@ -851,6 +891,22 @@ class MultiUserWalletLedger:
                 f"Actual={day_total}, Intento={transfer_amount}, Límite={effective_daily_limit}."
             )
 
+        exchange_metadata = {}
+        credit_amount = transfer_amount
+        if is_cross_currency:
+            from domain.exchange import convert_amount as _convert
+            rate_decimal = normalize_amount(rate_info["rate"])
+            comm_decimal = Decimal(str(rate_info["commission_pct"]))
+            conversion = _convert(transfer_amount, rate_decimal, comm_decimal)
+            credit_amount = normalize_amount(conversion["net_amount"])
+            exchange_metadata = {
+                "sender_currency": sender.currency,
+                "receiver_currency": receiver.currency,
+                "exchange_rate": conversion["rate"],
+                "exchange_commission": conversion["commission"],
+                "converted_amount": conversion["net_amount"],
+            }
+
         total_cost = transfer_amount + tx_fee
         if sender.model == "ACCOUNT":
             if sender.balance < total_cost:
@@ -859,7 +915,7 @@ class MultiUserWalletLedger:
                     f"Requerido={total_cost}."
                 )
             sender.balance -= total_cost
-            receiver.balance += transfer_amount
+            receiver.balance += credit_amount
         else:
             selected: list[dict] = []
             selected_total = Decimal("0")
@@ -890,8 +946,8 @@ class MultiUserWalletLedger:
                     "utxo_id": self._build_utxo_id(),
                     "wallet_id": receiver_wallet,
                     "currency": receiver.currency,
-                    "amount": str(transfer_amount),
-                    "source": "TRANSFER",
+                    "amount": str(credit_amount),
+                    "source": "EXCHANGE" if is_cross_currency else "TRANSFER",
                     "created_at": self._timestamp(),
                 }
             )
@@ -928,23 +984,23 @@ class MultiUserWalletLedger:
             created_at=created_at,
             previous_hash=previous_hash,
         )
-        self.transfers.append(
-            {
-                "transfer_id": transfer_id,
-                "type": "TRANSFER",
-                "model": sender.model,
-                "sender_wallet": sender_wallet,
-                "receiver_wallet": receiver_wallet,
-                "amount": str(transfer_amount),
-                "fee": str(tx_fee),
-                "nonce": transfer_nonce,
-                "previous_hash": previous_hash,
-                "tx_hash": tx_hash,
-                "reference": reference,
-                "status": "SETTLED",
-                "created_at": created_at,
-            }
-        )
+        transfer_record = {
+            "transfer_id": transfer_id,
+            "type": "EXCHANGE" if is_cross_currency else "TRANSFER",
+            "model": sender.model,
+            "sender_wallet": sender_wallet,
+            "receiver_wallet": receiver_wallet,
+            "amount": str(transfer_amount),
+            "fee": str(tx_fee),
+            "nonce": transfer_nonce,
+            "previous_hash": previous_hash,
+            "tx_hash": tx_hash,
+            "reference": reference,
+            "status": "SETTLED",
+            "created_at": created_at,
+        }
+        transfer_record.update(exchange_metadata)
+        self.transfers.append(transfer_record)
         self.wallet_nonces[sender_wallet] = transfer_nonce
 
         if (
@@ -1054,6 +1110,7 @@ class MultiUserWalletLedger:
             ],
             "admin_invitation_tokens": list(self.admin_invitation_tokens),
             "activation_codes": list(self.activation_codes.values()),
+            "exchange_rates": list(self.exchange_rates.values()),
         }
 
     @classmethod
@@ -1260,6 +1317,18 @@ class MultiUserWalletLedger:
                     "code": str(ac.get("code", "")),
                     "activated": bool(ac.get("activated", False)),
                     "created_at": str(ac.get("created_at", cls._timestamp())),
+                }
+
+        for er in snapshot.get("exchange_rates", []):
+            key = str(er.get("pair_id", "")).strip()
+            if key:
+                ledger.exchange_rates[key] = {
+                    "pair_id": key,
+                    "from_currency": str(er.get("from_currency", "")),
+                    "to_currency": str(er.get("to_currency", "")),
+                    "rate": str(er.get("rate", "0")),
+                    "commission_pct": str(er.get("commission_pct", "1.0")),
+                    "updated_at": str(er.get("updated_at", cls._timestamp())),
                 }
 
         return ledger

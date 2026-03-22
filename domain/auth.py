@@ -34,6 +34,8 @@ class Permission(str, Enum):
     VIEW_POLICIES = "VIEW_POLICIES"
     VIEW_RISK_PROFILES = "VIEW_RISK_PROFILES"
     VIEW_REVISIONS = "VIEW_REVISIONS"
+    EXCHANGE = "EXCHANGE"
+    SET_EXCHANGE_RATE = "SET_EXCHANGE_RATE"
 
 
 ROLE_PERMISSIONS: dict[str, set[str]] = {
@@ -41,6 +43,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
     Role.OPERATOR: {
         Permission.CREATE_WALLET,
         Permission.TRANSFER,
+        Permission.EXCHANGE,
         Permission.MINT,
         Permission.VIEW_USERS,
         Permission.VIEW_WALLETS,
@@ -53,6 +56,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
     Role.VIEWER: {
         Permission.CREATE_WALLET,
         Permission.TRANSFER,
+        Permission.EXCHANGE,
         Permission.VIEW_USERS,
         Permission.VIEW_WALLETS,
         Permission.VIEW_TRANSFERS,
