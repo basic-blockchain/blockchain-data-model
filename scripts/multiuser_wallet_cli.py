@@ -396,6 +396,24 @@ def main() -> None:
     )
     _add_json_flag(cmd_verify_integrity)
 
+    # ── Moderation commands ──
+    cmd_freeze_wallet = subparsers.add_parser("freeze-wallet", help="Freeze a wallet (ADMIN only)")
+    _add_json_flag(cmd_freeze_wallet)
+    cmd_freeze_wallet.add_argument("--wallet-id", required=True)
+
+    cmd_unfreeze_wallet = subparsers.add_parser("unfreeze-wallet", help="Unfreeze a wallet (ADMIN only)")
+    _add_json_flag(cmd_unfreeze_wallet)
+    cmd_unfreeze_wallet.add_argument("--wallet-id", required=True)
+
+    cmd_ban_user = subparsers.add_parser("ban-user", help="Ban a user and freeze their wallets (ADMIN only)")
+    _add_json_flag(cmd_ban_user)
+    cmd_ban_user.add_argument("--user-id", required=True)
+
+    cmd_unban_user = subparsers.add_parser("unban-user", help="Unban a user (ADMIN only)")
+    _add_json_flag(cmd_unban_user)
+    cmd_unban_user.add_argument("--user-id", required=True)
+    cmd_unban_user.add_argument("--unfreeze-wallets", type=_parse_optional_bool, default=True)
+
     args = parser.parse_args()
     store_file = Path(args.store_file)
     output_json = bool(args.json or getattr(args, "cmd_json", False))
@@ -528,6 +546,24 @@ def main() -> None:
         elif args.command == "reset-role-permissions":
             _require_auth(Permission.MANAGE_PERMISSIONS)
             result = ledger.reset_role_permissions(args.role)
+            mutate = True
+
+        # ── Moderation commands ──
+        elif args.command == "freeze-wallet":
+            _require_auth(Permission.FREEZE_WALLET)
+            result = ledger.freeze_wallet(args.wallet_id)
+            mutate = True
+        elif args.command == "unfreeze-wallet":
+            _require_auth(Permission.UNFREEZE_WALLET)
+            result = ledger.unfreeze_wallet(args.wallet_id)
+            mutate = True
+        elif args.command == "ban-user":
+            _require_auth(Permission.BAN_USER)
+            result = ledger.ban_user(args.user_id)
+            mutate = True
+        elif args.command == "unban-user":
+            _require_auth(Permission.UNBAN_USER)
+            result = ledger.unban_user(args.user_id, unfreeze_wallets=args.unfreeze_wallets)
             mutate = True
 
         # ── Admin commands (ADMIN only) ──

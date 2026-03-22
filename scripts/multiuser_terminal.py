@@ -191,6 +191,12 @@ ADMIN_MENU = [
         ("33", "list-user-permissions", "Ver permisos de un usuario"),
         ("34", "reset-role-permissions", "Resetear permisos de un rol"),
     ]),
+    ("MODERACION", [
+        ("35", "freeze-wallet", "Congelar wallet"),
+        ("36", "unfreeze-wallet", "Descongelar wallet"),
+        ("37", "ban-user", "Banear usuario"),
+        ("38", "unban-user", "Desbanear usuario"),
+    ]),
     ("SISTEMA", [
         ("22", "generate-admin-token", "Generar token de invitacion ADMIN"),
         ("11", "dashboard", "Metricas de sesion y rendimiento"),
@@ -830,6 +836,15 @@ def _auth_flow(store_file) -> SessionState:
             print(_box_bot())
             return session
 
+        if "suspendida" in str(result).lower():
+            print()
+            print(_box_top())
+            print(_box_line(_red("  CUENTA SUSPENDIDA")))
+            print(_box_mid())
+            print(_box_line(f"  {_dim('Tu cuenta ha sido suspendida por un administrador.')}"))
+            print(_box_line(f"  {_dim('Contacta a soporte tecnico o servicio al cliente.')}"))
+            print(_box_bot())
+            raise SystemExit(1)
         _print_result_box("ERROR", "login", str(result))
         if attempt < 2:
             print(_dim(f"  Intentos restantes: {2 - attempt}"))
@@ -1625,6 +1640,189 @@ def _cmd_reset_role_permissions(ctx: CommandContext) -> None:
     _execute_and_track(ctx, action="reset-role-permissions", result=result, revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units)
 
 
+# ── Admin token re-validation (sudo) ─────────────────────
+
+def _require_admin_token(ctx: CommandContext, action_label: str) -> bool:
+    """Prompt ADMIN to re-enter JWT token for sensitive operations.
+
+    Returns True if validated. Raises _SkipCommand on failure after retries.
+    """
+    from domain.auth import decode_jwt
+    from config.settings import get_settings
+
+    settings = get_settings()
+    if not settings.jwt_secret:
+        _print_result_box("ERROR", action_label, "JWT_SECRET no configurado.")
+        raise _SkipCommand
+
+    print()
+    print(_box_top())
+    print(_box_line(_yellow("  VALIDACION DE SEGURIDAD")))
+    print(_box_mid())
+    print(_box_line(f"  {_dim('Operacion sensible. Ingresa tu token de sesion para confirmar.')}"))
+    print(_box_line(f"  {_dim('Si tu token ha expirado, escribe')} {_bold('refresh')} {_dim('para renovarlo.')}"))
+    print(_box_bot())
+
+    for attempt in range(3):
+        token_input = _prompt("token", hint="(JWT o 'refresh')")
+
+        if token_input.lower() == "refresh":
+            # Re-authenticate with password to get new token
+            password = _prompt("password", hint="(tu password actual)")
+            result = ctx.ledger.login(
+                ctx.session.auth_user_id, password,
+                settings.jwt_secret, settings.jwt_ttl_seconds,
+            )
+            if isinstance(result, dict):
+                ctx.session.jwt_token = result["access_token"]
+                _print_result_box("SUCCESS", "token-refresh", "Token renovado exitosamente.")
+                return True
+            _print_result_box("ERROR", "token-refresh", "Credenciales invalidas.")
+            if attempt < 2:
+                print(_dim(f"  Intentos restantes: {2 - attempt}"))
+            continue
+
+        # Validate the provided token
+        try:
+            payload = decode_jwt(token_input, settings.jwt_secret)
+            if payload.get("sub") != ctx.session.auth_user_id:
+                _print_result_box("ERROR", action_label, "Token no corresponde al usuario actual.")
+                if attempt < 2:
+                    print(_dim(f"  Intentos restantes: {2 - attempt}"))
+                continue
+            return True
+        except Exception:
+            _print_result_box("ERROR", action_label, "Token invalido o expirado. Escribe 'refresh' para renovar.")
+            if attempt < 2:
+                print(_dim(f"  Intentos restantes: {2 - attempt}"))
+
+    _print_result_box("ERROR", action_label, "Maximo de intentos alcanzado. Operacion cancelada.")
+    raise _SkipCommand
+
+
+# ── Moderation handlers ──────────────────────────────────
+
+def _cmd_freeze_wallet(ctx: CommandContext) -> None:
+    _section_header("CONGELAR WALLET")
+    _require_admin_token(ctx, "freeze-wallet")
+    print()
+    print(_box_top())
+    print(_box_line(_cyan("  Modo de congelamiento:")))
+    print(_box_mid())
+    print(_box_line(f"  {_yellow('[1]')} Por usuario   {_dim('(congela TODAS las wallets del usuario)')}"))
+    print(_box_line(f"  {_yellow('[2]')} Por wallet    {_dim('(congela una wallet especifica)')}"))
+    print(_box_bot())
+    mode = _prompt("Modo", hint="1 / 2")
+    if mode == "1":
+        user_id = _prompt("user_id")
+        input_units = _measure_units(user_id)
+        wallet_ids = ctx.ledger.user_wallets.get(user_id, [])
+        if not wallet_ids:
+            _print_result_box("ERROR", "freeze-wallet", f"Usuario {user_id} no tiene wallets.")
+            raise _SkipCommand
+        started_at = time.perf_counter()
+        frozen = []
+        for wid in wallet_ids:
+            ctx.ledger.freeze_wallet(wid)
+            frozen.append(wid)
+        elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+        rev = _persist(ctx.store, ctx.ledger)
+        result = {"user_id": user_id, "frozen_wallets": frozen, "message": f"{len(frozen)} wallet(s) congelada(s)."}
+        _print_data_box("Wallets congeladas", result, rev)
+        _execute_and_track(ctx, action="freeze-wallet", result=result, revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units)
+    else:
+        wallet_id = _prompt("wallet_id")
+        input_units = _measure_units(wallet_id)
+        started_at = time.perf_counter()
+        result = ctx.ledger.freeze_wallet(wallet_id)
+        elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+        if isinstance(result, str) and result.startswith("Error"):
+            _print_result_box("ERROR", "freeze-wallet", result)
+            _execute_and_track(ctx, action="freeze-wallet", result=result, revision_id=None, is_error=True, elapsed_ms=elapsed_ms, input_units=input_units)
+            raise _SkipCommand
+        rev = _persist(ctx.store, ctx.ledger)
+        _print_data_box("Wallet congelada", result if isinstance(result, dict) else {"resultado": result}, rev)
+        _execute_and_track(ctx, action="freeze-wallet", result=result, revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units)
+
+
+def _cmd_unfreeze_wallet(ctx: CommandContext) -> None:
+    _section_header("DESCONGELAR WALLET")
+    _require_admin_token(ctx, "unfreeze-wallet")
+    print()
+    print(_box_top())
+    print(_box_line(_cyan("  Modo de descongelamiento:")))
+    print(_box_mid())
+    print(_box_line(f"  {_yellow('[1]')} Por usuario   {_dim('(descongela TODAS las wallets del usuario)')}"))
+    print(_box_line(f"  {_yellow('[2]')} Por wallet    {_dim('(descongela una wallet especifica)')}"))
+    print(_box_bot())
+    mode = _prompt("Modo", hint="1 / 2")
+    if mode == "1":
+        user_id = _prompt("user_id")
+        input_units = _measure_units(user_id)
+        wallet_ids = ctx.ledger.user_wallets.get(user_id, [])
+        if not wallet_ids:
+            _print_result_box("ERROR", "unfreeze-wallet", f"Usuario {user_id} no tiene wallets.")
+            raise _SkipCommand
+        started_at = time.perf_counter()
+        unfrozen = []
+        for wid in wallet_ids:
+            ctx.ledger.unfreeze_wallet(wid)
+            unfrozen.append(wid)
+        elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+        rev = _persist(ctx.store, ctx.ledger)
+        result = {"user_id": user_id, "unfrozen_wallets": unfrozen, "message": f"{len(unfrozen)} wallet(s) descongelada(s)."}
+        _print_data_box("Wallets descongeladas", result, rev)
+        _execute_and_track(ctx, action="unfreeze-wallet", result=result, revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units)
+    else:
+        wallet_id = _prompt("wallet_id")
+        input_units = _measure_units(wallet_id)
+        started_at = time.perf_counter()
+        result = ctx.ledger.unfreeze_wallet(wallet_id)
+        elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+        if isinstance(result, str) and result.startswith("Error"):
+            _print_result_box("ERROR", "unfreeze-wallet", result)
+            _execute_and_track(ctx, action="unfreeze-wallet", result=result, revision_id=None, is_error=True, elapsed_ms=elapsed_ms, input_units=input_units)
+            raise _SkipCommand
+        rev = _persist(ctx.store, ctx.ledger)
+        _print_data_box("Wallet descongelada", result if isinstance(result, dict) else {"resultado": result}, rev)
+        _execute_and_track(ctx, action="unfreeze-wallet", result=result, revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units)
+
+
+def _cmd_ban_user(ctx: CommandContext) -> None:
+    _section_header("BANEAR USUARIO")
+    _require_admin_token(ctx, "ban-user")
+    user_id = _prompt("user_id")
+    input_units = _measure_units(user_id)
+    started_at = time.perf_counter()
+    result = ctx.ledger.ban_user(user_id)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    if isinstance(result, str) and result.startswith("Error"):
+        _print_result_box("ERROR", "ban-user", result)
+        _execute_and_track(ctx, action="ban-user", result=result, revision_id=None, is_error=True, elapsed_ms=elapsed_ms, input_units=input_units)
+        raise _SkipCommand
+    rev = _persist(ctx.store, ctx.ledger)
+    _print_data_box("Usuario baneado", result if isinstance(result, dict) else {"resultado": result}, rev)
+    _execute_and_track(ctx, action="ban-user", result=result, revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units)
+
+
+def _cmd_unban_user(ctx: CommandContext) -> None:
+    _section_header("DESBANEAR USUARIO")
+    _require_admin_token(ctx, "unban-user")
+    user_id = _prompt("user_id")
+    unfreeze = _prompt_confirm("Desbanear Y descongelar todas las wallets del usuario?")
+    input_units = _measure_units(user_id)
+    started_at = time.perf_counter()
+    result = ctx.ledger.unban_user(user_id, unfreeze_wallets=unfreeze)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    if isinstance(result, str) and result.startswith("Error"):
+        _print_result_box("ERROR", "unban-user", result)
+        _execute_and_track(ctx, action="unban-user", result=result, revision_id=None, is_error=True, elapsed_ms=elapsed_ms, input_units=input_units)
+        raise _SkipCommand
+    rev = _persist(ctx.store, ctx.ledger)
+    _print_data_box("Usuario desbaneado", result if isinstance(result, dict) else {"resultado": result}, rev)
+    _execute_and_track(ctx, action="unban-user", result=result, revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units)
+
+
 # ── Command handler registry ────────────────────────────
 
 from typing import Callable
@@ -1665,6 +1863,10 @@ COMMAND_HANDLERS: dict[str, tuple[Callable, str | None]] = {
     "32": (_cmd_list_role_permissions,   Permission.MANAGE_PERMISSIONS),
     "33": (_cmd_list_user_permissions,   Permission.MANAGE_PERMISSIONS),
     "34": (_cmd_reset_role_permissions,  Permission.MANAGE_PERMISSIONS),
+    "35": (_cmd_freeze_wallet,           Permission.FREEZE_WALLET),
+    "36": (_cmd_unfreeze_wallet,         Permission.UNFREEZE_WALLET),
+    "37": (_cmd_ban_user,                Permission.BAN_USER),
+    "38": (_cmd_unban_user,              Permission.UNBAN_USER),
 }
 
 

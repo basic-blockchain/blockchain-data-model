@@ -153,27 +153,45 @@ class PgMultiUserWalletStore(WalletLedgerRepository):
         }
 
     def _fetch_users(self, cur) -> list[dict]:
-        cur.execute("SELECT user_id, display_name, created_at FROM users ORDER BY created_at")
-        return [
-            {
+        has_banned = self._column_exists(cur, "users", "banned")
+        if has_banned:
+            cur.execute("SELECT user_id, display_name, created_at, banned FROM users ORDER BY created_at")
+        else:
+            cur.execute("SELECT user_id, display_name, created_at FROM users ORDER BY created_at")
+        results = []
+        for r in cur.fetchall():
+            rec = {
                 "user_id": r[0],
                 "display_name": r[1],
                 "created_at": r[2].isoformat() if r[2] else "",
                 "wallet_ids": [],
             }
-            for r in cur.fetchall()
-        ]
+            if has_banned:
+                rec["banned"] = bool(r[3])
+            results.append(rec)
+        return results
 
     def _fetch_wallets(self, cur) -> list[dict]:
-        cur.execute(
-            """
-            SELECT wallet_id, user_id, model, currency, balance,
-                   auth_token, token_issued_at, token_expires_at, created_at
-            FROM wallets ORDER BY created_at
-            """
-        )
-        return [
-            {
+        has_frozen = self._column_exists(cur, "wallets", "frozen")
+        if has_frozen:
+            cur.execute(
+                """
+                SELECT wallet_id, user_id, model, currency, balance,
+                       auth_token, token_issued_at, token_expires_at, created_at, frozen
+                FROM wallets ORDER BY created_at
+                """
+            )
+        else:
+            cur.execute(
+                """
+                SELECT wallet_id, user_id, model, currency, balance,
+                       auth_token, token_issued_at, token_expires_at, created_at
+                FROM wallets ORDER BY created_at
+                """
+            )
+        results = []
+        for r in cur.fetchall():
+            rec = {
                 "wallet_id": r[0],
                 "user_id": r[1],
                 "model": r[2],
@@ -185,8 +203,10 @@ class PgMultiUserWalletStore(WalletLedgerRepository):
                 "token_expires_at": r[7],
                 "created_at": r[8].isoformat() if r[8] else "",
             }
-            for r in cur.fetchall()
-        ]
+            if has_frozen:
+                rec["frozen"] = bool(r[9])
+            results.append(rec)
+        return results
 
     def _fetch_policies(self, cur) -> list[dict]:
         cur.execute("SELECT user_id, can_transfer, daily_limit, updated_at FROM user_policies")
@@ -351,34 +371,67 @@ class PgMultiUserWalletStore(WalletLedgerRepository):
     # ── Upsert / Sync helpers ────────────────────────────────
 
     def _upsert_users(self, cur, users: list[dict]) -> None:
+        has_banned = self._column_exists(cur, "users", "banned")
         for u in users:
-            cur.execute(
-                """
-                INSERT INTO users (user_id, display_name, created_at)
-                VALUES (%s, %s, %s)
-                ON CONFLICT (user_id) DO UPDATE SET display_name = EXCLUDED.display_name
-                """,
-                (u["user_id"], u["display_name"], u.get("created_at")),
-            )
+            if has_banned:
+                cur.execute(
+                    """
+                    INSERT INTO users (user_id, display_name, created_at, banned)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (user_id) DO UPDATE SET
+                        display_name = EXCLUDED.display_name,
+                        banned = EXCLUDED.banned
+                    """,
+                    (u["user_id"], u["display_name"], u.get("created_at"), u.get("banned", False)),
+                )
+            else:
+                cur.execute(
+                    """
+                    INSERT INTO users (user_id, display_name, created_at)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (user_id) DO UPDATE SET display_name = EXCLUDED.display_name
+                    """,
+                    (u["user_id"], u["display_name"], u.get("created_at")),
+                )
 
     def _upsert_wallets(self, cur, wallets: list[dict]) -> None:
+        has_frozen = self._column_exists(cur, "wallets", "frozen")
         for w in wallets:
-            cur.execute(
-                """
-                INSERT INTO wallets (wallet_id, user_id, model, currency,
-                                     balance, auth_token, token_issued_at, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (wallet_id) DO UPDATE SET
-                    balance = EXCLUDED.balance,
-                    auth_token = EXCLUDED.auth_token,
-                    token_issued_at = EXCLUDED.token_issued_at
-                """,
-                (
-                    w["wallet_id"], w["user_id"], w["model"], w["currency"],
-                    w["balance"], w["auth_token"], w["token_issued_at"],
-                    w.get("created_at"),
-                ),
-            )
+            if has_frozen:
+                cur.execute(
+                    """
+                    INSERT INTO wallets (wallet_id, user_id, model, currency,
+                                         balance, auth_token, token_issued_at, created_at, frozen)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (wallet_id) DO UPDATE SET
+                        balance = EXCLUDED.balance,
+                        auth_token = EXCLUDED.auth_token,
+                        token_issued_at = EXCLUDED.token_issued_at,
+                        frozen = EXCLUDED.frozen
+                    """,
+                    (
+                        w["wallet_id"], w["user_id"], w["model"], w["currency"],
+                        w["balance"], w["auth_token"], w["token_issued_at"],
+                        w.get("created_at"), w.get("frozen", False),
+                    ),
+                )
+            else:
+                cur.execute(
+                    """
+                    INSERT INTO wallets (wallet_id, user_id, model, currency,
+                                         balance, auth_token, token_issued_at, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (wallet_id) DO UPDATE SET
+                        balance = EXCLUDED.balance,
+                        auth_token = EXCLUDED.auth_token,
+                        token_issued_at = EXCLUDED.token_issued_at
+                    """,
+                    (
+                        w["wallet_id"], w["user_id"], w["model"], w["currency"],
+                        w["balance"], w["auth_token"], w["token_issued_at"],
+                        w.get("created_at"),
+                    ),
+                )
 
     def _upsert_policies(self, cur, policies: list[dict]) -> None:
         for p in policies:
