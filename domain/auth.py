@@ -1,0 +1,118 @@
+"""Authentication, authorization, and role-based access control (pure domain, no framework imports)."""
+
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass
+from enum import Enum
+
+import bcrypt
+import jwt
+
+
+# ── Roles & Permissions ──────────────────────────────────
+
+
+class Role(str, Enum):
+    ADMIN = "ADMIN"
+    OPERATOR = "OPERATOR"
+    VIEWER = "VIEWER"
+
+
+class Permission(str, Enum):
+    CREATE_USER = "CREATE_USER"
+    CREATE_WALLET = "CREATE_WALLET"
+    TRANSFER = "TRANSFER"
+    MINT = "MINT"
+    SET_POLICY = "SET_POLICY"
+    SET_RISK_PROFILE = "SET_RISK_PROFILE"
+    ASSIGN_ROLE = "ASSIGN_ROLE"
+    VIEW_USERS = "VIEW_USERS"
+    VIEW_WALLETS = "VIEW_WALLETS"
+    VIEW_TRANSFERS = "VIEW_TRANSFERS"
+    VIEW_ALERTS = "VIEW_ALERTS"
+    VIEW_POLICIES = "VIEW_POLICIES"
+    VIEW_RISK_PROFILES = "VIEW_RISK_PROFILES"
+    VIEW_REVISIONS = "VIEW_REVISIONS"
+
+
+ROLE_PERMISSIONS: dict[str, set[str]] = {
+    Role.ADMIN: {p.value for p in Permission},
+    Role.OPERATOR: {
+        Permission.CREATE_WALLET,
+        Permission.TRANSFER,
+        Permission.MINT,
+        Permission.VIEW_USERS,
+        Permission.VIEW_WALLETS,
+        Permission.VIEW_TRANSFERS,
+        Permission.VIEW_ALERTS,
+        Permission.VIEW_POLICIES,
+        Permission.VIEW_RISK_PROFILES,
+        Permission.VIEW_REVISIONS,
+    },
+    Role.VIEWER: {
+        Permission.VIEW_USERS,
+        Permission.VIEW_WALLETS,
+        Permission.VIEW_TRANSFERS,
+        Permission.VIEW_ALERTS,
+        Permission.VIEW_POLICIES,
+        Permission.VIEW_RISK_PROFILES,
+        Permission.VIEW_REVISIONS,
+    },
+}
+
+
+def has_permission(roles: list[str], permission: str) -> bool:
+    for role in roles:
+        role_perms = ROLE_PERMISSIONS.get(role, set())
+        if permission in role_perms:
+            return True
+    return False
+
+
+# ── Dataclasses ──────────────────────────────────────────
+
+
+@dataclass
+class UserCredential:
+    user_id: str
+    password_hash: str
+    created_at: str
+    updated_at: str = ""
+
+
+@dataclass
+class UserRoleRecord:
+    user_id: str
+    role: str
+    granted_at: str
+
+
+# ── Password hashing ────────────────────────────────────
+
+
+def hash_password(plain: str, rounds: int = 12) -> str:
+    salt = bcrypt.gensalt(rounds=rounds)
+    return bcrypt.hashpw(plain.encode("utf-8"), salt).decode("utf-8")
+
+
+def verify_password(plain: str, hashed: str) -> bool:
+    return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
+
+
+# ── JWT ──────────────────────────────────────────────────
+
+
+def create_jwt(user_id: str, roles: list[str], secret: str, ttl_seconds: int = 3600) -> str:
+    now = int(time.time())
+    payload = {
+        "sub": user_id,
+        "roles": roles,
+        "iat": now,
+        "exp": now + ttl_seconds,
+    }
+    return jwt.encode(payload, secret, algorithm="HS256")
+
+
+def decode_jwt(token: str, secret: str) -> dict:
+    return jwt.decode(token, secret, algorithms=["HS256"])

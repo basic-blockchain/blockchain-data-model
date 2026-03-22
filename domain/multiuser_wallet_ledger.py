@@ -68,6 +68,8 @@ class MultiUserWalletLedger:
         self.wallet_nonces: dict[str, int] = {}
         self.transfers: list[dict] = []
         self.alerts: list[dict] = []
+        self.user_credentials: dict[str, dict] = {}
+        self.user_roles: dict[str, list[str]] = {}
 
     RISK_PROFILE_DEFAULTS: dict[str, dict[str, str | None]] = {
         "STANDARD": {
@@ -212,7 +214,7 @@ class MultiUserWalletLedger:
             return None
         return min(values)
 
-    def create_user(self, user_id: str, display_name: str) -> str:
+    def create_user(self, user_id: str, display_name: str, password: str = "") -> str:
         if not user_id or not display_name:
             return "Error: user_id y display_name son requeridos."
         if user_id in self.users:
@@ -226,7 +228,82 @@ class MultiUserWalletLedger:
         self.user_wallets[user_id] = []
         self.user_policies[user_id] = self._new_user_policy(user_id)
         self.user_risk_profiles[user_id] = self._new_user_risk_profile(user_id)
+        self.user_roles[user_id] = []
+
+        if password:
+            from domain.auth import hash_password
+            now = self._timestamp()
+            self.user_credentials[user_id] = {
+                "user_id": user_id,
+                "password_hash": hash_password(password),
+                "created_at": now,
+                "updated_at": now,
+            }
+
         return f"Usuario {user_id} creado."
+
+    def set_user_password(self, user_id: str, password: str) -> str:
+        if user_id not in self.users:
+            return f"Error: usuario {user_id} no existe."
+        if not password:
+            return "Error: password es requerido."
+        from domain.auth import hash_password
+        now = self._timestamp()
+        self.user_credentials[user_id] = {
+            "user_id": user_id,
+            "password_hash": hash_password(password),
+            "created_at": self.user_credentials.get(user_id, {}).get("created_at", now),
+            "updated_at": now,
+        }
+        return f"Password actualizado para {user_id}."
+
+    def authenticate(self, user_id: str, password: str) -> bool:
+        cred = self.user_credentials.get(user_id)
+        if not cred:
+            return False
+        from domain.auth import verify_password
+        return verify_password(password, cred["password_hash"])
+
+    def login(self, user_id: str, password: str, jwt_secret: str, jwt_ttl: int = 3600) -> dict | str:
+        if not self.authenticate(user_id, password):
+            return "Error: credenciales invalidas."
+        from domain.auth import create_jwt
+        roles = self.user_roles.get(user_id, [])
+        token = create_jwt(user_id, roles, jwt_secret, jwt_ttl)
+        return {
+            "access_token": token,
+            "token_type": "Bearer",
+            "expires_in": jwt_ttl,
+            "user_id": user_id,
+            "roles": roles,
+        }
+
+    def assign_role(self, user_id: str, role: str) -> str:
+        if user_id not in self.users:
+            return f"Error: usuario {user_id} no existe."
+        from domain.auth import Role
+        valid_roles = {r.value for r in Role}
+        role = role.upper()
+        if role not in valid_roles:
+            return f"Error: role invalido. Opciones: {', '.join(sorted(valid_roles))}."
+        roles = self.user_roles.setdefault(user_id, [])
+        if role in roles:
+            return f"Aviso: {user_id} ya tiene el role {role}."
+        roles.append(role)
+        return f"Role {role} asignado a {user_id}."
+
+    def remove_role(self, user_id: str, role: str) -> str:
+        if user_id not in self.users:
+            return f"Error: usuario {user_id} no existe."
+        role = role.upper()
+        roles = self.user_roles.get(user_id, [])
+        if role not in roles:
+            return f"Error: {user_id} no tiene el role {role}."
+        roles.remove(role)
+        return f"Role {role} removido de {user_id}."
+
+    def get_user_roles(self, user_id: str) -> list[str]:
+        return list(self.user_roles.get(user_id, []))
 
     def set_user_policy(
         self,
@@ -885,6 +962,15 @@ class MultiUserWalletLedger:
             "utxos": self.list_utxos(),
             "transfers": list(self.transfers),
             "alerts": list(self.alerts),
+            "credentials": [
+                {"user_id": uid, "password_hash": c["password_hash"], "created_at": c.get("created_at", ""), "updated_at": c.get("updated_at", "")}
+                for uid, c in self.user_credentials.items()
+            ],
+            "roles": [
+                {"user_id": uid, "role": role, "granted_at": self._timestamp()}
+                for uid, roles in self.user_roles.items()
+                for role in roles
+            ],
         }
 
     @classmethod
@@ -1058,5 +1144,27 @@ class MultiUserWalletLedger:
             }
             for item in snapshot.get("alerts", [])
         ]
+
+        for cred in snapshot.get("credentials", []):
+            uid = str(cred.get("user_id", "")).strip()
+            if uid and uid in ledger.users:
+                ledger.user_credentials[uid] = {
+                    "user_id": uid,
+                    "password_hash": str(cred.get("password_hash", "")),
+                    "created_at": str(cred.get("created_at", cls._timestamp())),
+                    "updated_at": str(cred.get("updated_at", "")),
+                }
+
+        for role_rec in snapshot.get("roles", []):
+            uid = str(role_rec.get("user_id", "")).strip()
+            role = str(role_rec.get("role", "")).upper()
+            if uid and uid in ledger.users and role:
+                ledger.user_roles.setdefault(uid, [])
+                if role not in ledger.user_roles[uid]:
+                    ledger.user_roles[uid].append(role)
+
+        for uid in ledger.users:
+            if uid not in ledger.user_roles:
+                ledger.user_roles[uid] = []
 
         return ledger
