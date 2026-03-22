@@ -47,6 +47,7 @@ class Permission(str, Enum):
     RESTORE_USER = "RESTORE_USER"
     GENERATE_TEMP_PASSWORD = "GENERATE_TEMP_PASSWORD"
     VIEW_AUDIT_LOG = "VIEW_AUDIT_LOG"
+    UPDATE_PROFILE = "UPDATE_PROFILE"
 
 
 ROLE_PERMISSIONS: dict[str, set[str]] = {
@@ -56,6 +57,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         Permission.TRANSFER,
         Permission.EXCHANGE,
         Permission.MINT,
+        Permission.UPDATE_PROFILE,
         Permission.VIEW_USERS,
         Permission.VIEW_WALLETS,
         Permission.VIEW_TRANSFERS,
@@ -68,6 +70,7 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         Permission.CREATE_WALLET,
         Permission.TRANSFER,
         Permission.EXCHANGE,
+        Permission.UPDATE_PROFILE,
         Permission.VIEW_USERS,
         Permission.VIEW_WALLETS,
         Permission.VIEW_TRANSFERS,

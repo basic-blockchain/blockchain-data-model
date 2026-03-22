@@ -163,6 +163,7 @@ class PgMultiUserWalletStore(WalletLedgerRepository):
         has_banned = self._column_exists(cur, "users", "banned")
         has_updated = self._column_exists(cur, "users", "updated_at")
         has_deleted = self._column_exists(cur, "users", "deleted_at")
+        has_profile = self._column_exists(cur, "users", "first_name")
         cols = ["user_id", "display_name", "created_at"]
         if has_banned:
             cols.append("banned")
@@ -170,6 +171,8 @@ class PgMultiUserWalletStore(WalletLedgerRepository):
             cols.append("updated_at")
         if has_deleted:
             cols.append("deleted_at")
+        if has_profile:
+            cols.extend(["first_name", "last_name", "email", "username"])
         cur.execute(f"SELECT {', '.join(cols)} FROM users ORDER BY created_at")
         results = []
         for r in cur.fetchall():
@@ -186,6 +189,11 @@ class PgMultiUserWalletStore(WalletLedgerRepository):
                 rec["updated_at"] = r[idx].isoformat() if r[idx] else ""; idx += 1
             if has_deleted:
                 rec["deleted_at"] = r[idx].isoformat() if r[idx] else ""; idx += 1
+            if has_profile:
+                rec["first_name"] = r[idx] or ""; idx += 1
+                rec["last_name"] = r[idx] or ""; idx += 1
+                rec["email"] = r[idx] or ""; idx += 1
+                rec["username"] = r[idx] or ""; idx += 1
             results.append(rec)
         return results
 
@@ -410,6 +418,9 @@ class PgMultiUserWalletStore(WalletLedgerRepository):
                 cols.append("updated_at"); vals.append(u.get("updated_at") or None); updates.append("updated_at = EXCLUDED.updated_at")
             if has_deleted:
                 cols.append("deleted_at"); vals.append(u.get("deleted_at") or None); updates.append("deleted_at = EXCLUDED.deleted_at")
+            if self._column_exists(cur, "users", "first_name"):
+                for field in ("first_name", "last_name", "email", "username"):
+                    cols.append(field); vals.append(u.get(field, "")); updates.append(f"{field} = EXCLUDED.{field}")
             placeholders = ", ".join(["%s"] * len(vals))
             col_names = ", ".join(cols)
             update_clause = ", ".join(updates)

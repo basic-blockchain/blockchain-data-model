@@ -207,6 +207,7 @@ ADMIN_MENU = [
     ("SISTEMA", [
         ("22", "generate-admin-token", "Generar token de invitacion ADMIN"),
         ("44", "change-password", "Cambiar mi contrasena"),
+        ("45", "update-profile", "Actualizar mi perfil"),
         ("11", "dashboard", "Metricas de sesion y rendimiento"),
         ("0", "exit", "Salir del terminal"),
     ]),
@@ -233,6 +234,7 @@ OPERATOR_MENU = [
     ]),
     ("SISTEMA", [
         ("44", "change-password", "Cambiar mi contrasena"),
+        ("45", "update-profile", "Actualizar mi perfil"),
         ("11", "dashboard", "Metricas de sesion"),
         ("0", "exit", "Salir"),
     ]),
@@ -258,6 +260,7 @@ VIEWER_MENU = [
     ]),
     ("SISTEMA", [
         ("44", "change-password", "Cambiar mi contrasena"),
+        ("45", "update-profile", "Actualizar mi perfil"),
         ("11", "dashboard", "Metricas de sesion"),
         ("0", "exit", "Salir"),
     ]),
@@ -930,12 +933,16 @@ def _cmd_create_user(ctx: CommandContext) -> None:
     if role not in ("ADMIN", "OPERATOR", "VIEWER"):
         _print_result_box("ERROR", "create-user", f"Rol invalido: {role}")
         raise _SkipCommand
+    email = _prompt("email", hint="(obligatorio)")
+    username = _prompt("username", hint=f"(enter={display_name})")
+    first_name = _prompt("first_name", hint="(opcional)")
+    last_name = _prompt("last_name", hint="(opcional)")
     invitation_token = ""
     if role == "ADMIN":
         invitation_token = _prompt("invitation_token", hint="(requerido para ADMIN)")
-    input_units = _measure_units(user_id, display_name, role)
+    input_units = _measure_units(user_id, display_name, role, email, username)
     started_at = time.perf_counter()
-    result = ctx.ledger.create_user(user_id, display_name, password=password, role=role, invitation_token=invitation_token)
+    result = ctx.ledger.create_user(user_id, display_name, password=password, role=role, invitation_token=invitation_token, first_name=first_name, last_name=last_name, email=email, username=username)
     if isinstance(result, str) and result.startswith("Error"):
         elapsed_ms = (time.perf_counter() - started_at) * 1000.0
         _print_result_box("ERROR", "create-user", result)
@@ -1971,6 +1978,31 @@ def _cmd_change_password(ctx: CommandContext) -> None:
     _execute_and_track(ctx, action="change-password", result=result, revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units)
 
 
+def _cmd_update_profile(ctx: CommandContext) -> None:
+    _section_header("ACTUALIZAR PERFIL")
+    is_admin = "ADMIN" in ctx.session.auth_roles
+    if is_admin:
+        user_id = _prompt("user_id", hint=f"(enter={ctx.session.auth_user_id})", default=ctx.session.auth_user_id)
+    else:
+        user_id = ctx.session.auth_user_id
+        print(_dim(f"  Usuario: {user_id}"))
+    first_name = _prompt("first_name", hint="(vacio=no cambiar)")
+    last_name = _prompt("last_name", hint="(vacio=no cambiar)")
+    email = _prompt("email", hint="(vacio=no cambiar)")
+    username = _prompt("username", hint="(vacio=no cambiar)")
+    input_units = _measure_units(user_id, first_name, last_name, email, username)
+    started_at = time.perf_counter()
+    result = ctx.ledger.update_profile(user_id, first_name=first_name or None, last_name=last_name or None, email=email or None, username=username or None)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    if isinstance(result, str) and result.startswith("Error"):
+        _print_result_box("ERROR", "update-profile", result)
+        _execute_and_track(ctx, action="update-profile", result=result, revision_id=None, is_error=True, elapsed_ms=elapsed_ms, input_units=input_units)
+        raise _SkipCommand
+    rev = _persist(ctx.store, ctx.ledger)
+    _print_data_box("Perfil actualizado", result if isinstance(result, dict) else {"resultado": result}, rev)
+    _execute_and_track(ctx, action="update-profile", result=result, revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units)
+
+
 # ── Command handler registry ────────────────────────────
 
 from typing import Callable
@@ -2021,6 +2053,7 @@ COMMAND_HANDLERS: dict[str, tuple[Callable, str | None]] = {
     "42": (_cmd_generate_temp_password,  Permission.GENERATE_TEMP_PASSWORD),
     "43": (_cmd_list_audit_log,          Permission.VIEW_AUDIT_LOG),
     "44": (_cmd_change_password,         None),
+    "45": (_cmd_update_profile,          Permission.UPDATE_PROFILE),
 }
 
 

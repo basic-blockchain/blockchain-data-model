@@ -245,6 +245,18 @@ def main() -> None:
     cmd_user.add_argument("--user-id", required=True)
     cmd_user.add_argument("--display-name", required=True)
     cmd_user.add_argument("--password", default="")
+    cmd_user.add_argument("--first-name", default="")
+    cmd_user.add_argument("--last-name", default="")
+    cmd_user.add_argument("--email", default="")
+    cmd_user.add_argument("--username", default="")
+
+    cmd_update_profile = subparsers.add_parser("update-profile", help="Update user profile (own or ADMIN for others)")
+    _add_json_flag(cmd_update_profile)
+    cmd_update_profile.add_argument("--user-id", required=True)
+    cmd_update_profile.add_argument("--first-name", default="")
+    cmd_update_profile.add_argument("--last-name", default="")
+    cmd_update_profile.add_argument("--email", default="")
+    cmd_update_profile.add_argument("--username", default="")
 
     cmd_wallet = subparsers.add_parser("create-wallet", help="Create a wallet for an existing user")
     _add_json_flag(cmd_wallet)
@@ -501,7 +513,11 @@ def main() -> None:
         # ── Admin-only commands ──
         elif args.command == "create-user":
             _require_auth(Permission.CREATE_USER)
-            result = ledger.create_user(args.user_id, args.display_name, password=getattr(args, "password", ""))
+            result = ledger.create_user(args.user_id, args.display_name, password=getattr(args, "password", ""), first_name=getattr(args, "first_name", ""), last_name=getattr(args, "last_name", ""), email=getattr(args, "email", ""), username=getattr(args, "username", ""))
+            mutate = True
+        elif args.command == "update-profile":
+            _require_auth(Permission.UPDATE_PROFILE)
+            result = ledger.update_profile(args.user_id, first_name=args.first_name or None, last_name=args.last_name or None, email=args.email or None, username=args.username or None)
             mutate = True
         elif args.command == "assign-role":
             _require_auth(Permission.ASSIGN_ROLE)

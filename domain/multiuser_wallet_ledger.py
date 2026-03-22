@@ -27,6 +27,10 @@ class UserRecord:
     banned: bool = False
     updated_at: str = ""
     deleted_at: str = ""
+    first_name: str = ""
+    last_name: str = ""
+    email: str = ""
+    username: str = ""
 
 
 @dataclass
@@ -247,7 +251,7 @@ class MultiUserWalletLedger:
     def is_empty(self) -> bool:
         return len(self.users) == 0
 
-    def create_user(self, user_id: str, display_name: str, password: str = "", role: str = "", invitation_token: str = "") -> dict | str:
+    def create_user(self, user_id: str, display_name: str, password: str = "", role: str = "", invitation_token: str = "", first_name: str = "", last_name: str = "", email: str = "", username: str = "") -> dict | str:
         if not user_id or not display_name:
             return "Error: user_id y display_name son requeridos."
         if user_id == TREASURY_USER_ID:
@@ -273,6 +277,10 @@ class MultiUserWalletLedger:
             user_id=user_id,
             display_name=display_name,
             created_at=self._timestamp(),
+            first_name=first_name.strip(),
+            last_name=last_name.strip(),
+            email=email.strip(),
+            username=(username.strip() if username.strip() else display_name.strip()),
         )
         self.user_wallets[user_id] = []
         self.user_policies[user_id] = self._new_user_policy(user_id)
@@ -1174,6 +1182,29 @@ class MultiUserWalletLedger:
         self._audit("SYSTEM", "USER_UPDATED", "USER", user.user_id, changes)
         return {"user_id": user.user_id, "changes": changes, "message": f"Usuario actualizado."}
 
+    def update_profile(self, user_id: str, first_name: str | None = None, last_name: str | None = None, email: str | None = None, username: str | None = None) -> dict | str:
+        if user_id not in self.users:
+            return f"Error: usuario {user_id} no existe."
+        user = self.users[user_id]
+        changes = {}
+        if first_name is not None and first_name != user.first_name:
+            user.first_name = first_name.strip()
+            changes["first_name"] = user.first_name
+        if last_name is not None and last_name != user.last_name:
+            user.last_name = last_name.strip()
+            changes["last_name"] = user.last_name
+        if email is not None and email != user.email:
+            user.email = email.strip()
+            changes["email"] = user.email
+        if username is not None and username != user.username:
+            user.username = username.strip()
+            changes["username"] = user.username
+        if not changes:
+            return "Error: no se especificaron cambios."
+        user.updated_at = self._timestamp()
+        self._audit("SYSTEM", "USER_UPDATED", "USER", user_id, {"profile_changes": changes})
+        return {"user_id": user_id, "changes": changes, "message": "Perfil actualizado."}
+
     def delete_user(self, user_id: str) -> dict | str:
         if user_id not in self.users:
             return f"Error: usuario {user_id} no existe."
@@ -1516,6 +1547,10 @@ class MultiUserWalletLedger:
                 "banned": user.banned,
                 "updated_at": user.updated_at,
                 "deleted_at": user.deleted_at,
+                "first_name": user.first_name,
+                "last_name": user.last_name,
+                "email": user.email,
+                "username": user.username,
             }
             for user in self.users.values()
         ]
@@ -1586,6 +1621,10 @@ class MultiUserWalletLedger:
                 banned=bool(user.get("banned", False)),
                 updated_at=str(user.get("updated_at", "")),
                 deleted_at=str(user.get("deleted_at", "")),
+                first_name=str(user.get("first_name", "")),
+                last_name=str(user.get("last_name", "")),
+                email=str(user.get("email", "")),
+                username=str(user.get("username", "")),
             )
             ledger.user_wallets[user_id] = []
 
