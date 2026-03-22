@@ -1,227 +1,91 @@
-# Simulacion Realista de Modelos Blockchain
+# Guia de Simulacion y Operacion — v2.8.0
 
 ## Objetivo principal
-Replicar con ejemplos reales el comportamiento de los dos modelos iniciales del repositorio:
-- UTXO
-- Account-based
 
-Esta guia tambien cubre el flujo operativo multiusuario vigente en v2.4.0.
+Replicar con ejemplos reales el comportamiento de los dos modelos blockchain del repositorio (UTXO y Account-based) y operar el sistema multiusuario de wallets con todos sus features activos hasta v2.8.0.
 
-## Script principal
+---
+
+## Simulador de modelos blockchain
+
+### Script principal
 
 ```bash
 py scripts/blockchain_models_simulator.py
 ```
 
-## Estado verificado en develop
+### Escenarios incluidos
 
-Antes de ejecutar, sincroniza la rama de trabajo:
+| Escenario | Descripcion |
+|-----------|-------------|
+| `coffee-export` | Trazabilidad de lote de cafe: certificados, eventos logisticos, transferencias, fees, auditoria de compliance |
+| `retail-payments` | Pagos minoristas: multiples transferencias, confirmaciones por bloque, costos de red (validator pool) |
 
-```bash
-cd /c/Users/User/Documents/sapir/blockchain_usb/scripts/python/blockchain-data-model
-git checkout develop
-git pull --ff-only origin develop
-```
-
-Estado funcional actual (v2.4.0):
-- Auth y RBAC existen en dominio/persistencia (bcrypt + JWT + roles).
-- CLI y terminal interactivo exponen el flujo operativo de wallets, transferencias, politicas y riesgo.
-- La seguridad operativa activa en CLI/terminal usa sender-token de wallet + expected-nonce.
-
-## Escenarios incluidos
-1. coffee-export
-- Trazabilidad de lote de cafe
-- Certificados
-- Eventos logisticos
-- Transferencias y fees
-- Auditoria de compliance
-
-2. retail-payments
-- Pagos de comercio minorista
-- Multiples transferencias
-- Confirmaciones por bloques
-- Costos de red (validator pool)
-
-## Ejemplos de ejecucion del simulador
+### Ejecucion del simulador
 
 ```bash
+# Comparar ambos modelos
 py scripts/blockchain_models_simulator.py --scenario coffee-export --model both
+
+# Solo UTXO o Account
 py scripts/blockchain_models_simulator.py --scenario retail-payments --model utxo
 py scripts/blockchain_models_simulator.py --scenario retail-payments --model account
+
+# Salida JSON
 py scripts/blockchain_models_simulator.py --scenario coffee-export --model both --json
-```
 
-## Persistencia JSON del simulador
-Archivos:
-- data/simulation-runs/utxo-runs.json
-- data/simulation-runs/account-runs.json
-
-Guardar corridas:
-
-```bash
+# Persistir corridas
 py scripts/blockchain_models_simulator.py --scenario coffee-export --model both --persist
-py scripts/blockchain_models_simulator.py --scenario retail-payments --model utxo --persist
-```
 
-Consultar corridas:
-
-```bash
+# Listar corridas guardadas
 py scripts/blockchain_models_simulator.py --list-runs --run-model both
 py scripts/blockchain_models_simulator.py --list-runs --run-model utxo --limit 10
+
+# Ver detalle de corrida
 py scripts/blockchain_models_simulator.py --show-run-id <RUN_ID> --run-model account
-```
 
-Directorio personalizado:
-
-```bash
+# Directorio personalizado
 py scripts/blockchain_models_simulator.py --scenario coffee-export --model account --persist --store-dir data/my-runs
 ```
 
-## Metricas por corrida
-Cada resultado incorpora metricas para observabilidad:
-- execution_ms
-- total_events
-- total_transactions
-- pending_transactions
-- confirmed_transactions
-- finalized_transactions
-- chain_height
-- state_items
+### Archivos de persistencia del simulador
 
-En modo --json, estas metricas viajan dentro de cada elemento de results.
+- `data/simulation-runs/utxo-runs.json`
+- `data/simulation-runs/account-runs.json`
 
-## Flujo CLI paso a paso (multiusuario, v2.4.0)
+### Metricas por corrida
 
-```bash
-# 0) Opcional: reset para corrida limpia
-bash scripts/reset_persistence_json.sh
+| Campo | Descripcion |
+|-------|-------------|
+| `execution_ms` | Tiempo de ejecucion en milisegundos |
+| `total_events` | Total de eventos procesados |
+| `total_transactions` | Total de transacciones |
+| `pending_transactions` | Transacciones pendientes |
+| `confirmed_transactions` | Transacciones confirmadas |
+| `finalized_transactions` | Transacciones finalizadas |
+| `chain_height` | Altura de la cadena |
+| `state_items` | Items en el estado final |
 
-# 1) Ver comandos disponibles
-py scripts/multiuser_wallet_cli.py --help
+---
 
-# 2) Crear usuarios
-py scripts/multiuser_wallet_cli.py --store-file data/multiuser/wallet-ledger.json create-user --user-id u-alice --display-name "Alice" --json
-py scripts/multiuser_wallet_cli.py --store-file data/multiuser/wallet-ledger.json create-user --user-id u-bob --display-name "Bob" --json
-
-# 3) Crear wallets (wallet_id manual: 20-30 chars [A-Za-z0-9_-])
-py scripts/multiuser_wallet_cli.py --store-file data/multiuser/wallet-ledger.json create-wallet --user-id u-alice --wallet-id wallet_user_alpha_01 --model UTXO --json
-py scripts/multiuser_wallet_cli.py --store-file data/multiuser/wallet-ledger.json create-wallet --user-id u-bob --wallet-id wallet_user_bravo_02 --model UTXO --json
-
-# 4) Fondear wallet
-py scripts/multiuser_wallet_cli.py --store-file data/multiuser/wallet-ledger.json mint --wallet-id wallet_user_alpha_01 --amount 100 --json
-
-# 5) Transferencia con sender-token + expected-nonce
-py scripts/multiuser_wallet_cli.py --store-file data/multiuser/wallet-ledger.json transfer --from-wallet wallet_user_alpha_01 --to-wallet wallet_user_bravo_02 --amount 15 --fee 0.5 --sender-token TOKEN_DE_ALICE --expected-nonce 1 --json
-
-# 6) Consultas
-py scripts/multiuser_wallet_cli.py --store-file data/multiuser/wallet-ledger.json balance --wallet-id wallet_user_bravo_02 --json
-py scripts/multiuser_wallet_cli.py --store-file data/multiuser/wallet-ledger.json list-utxos --wallet-id wallet_user_bravo_02 --json
-py scripts/multiuser_wallet_cli.py --store-file data/multiuser/wallet-ledger.json verify-integrity --json
-py scripts/multiuser_wallet_cli.py --store-file data/multiuser/wallet-ledger.json snapshot --json
-py scripts/multiuser_wallet_cli.py --store-file data/multiuser/wallet-ledger.json list-revisions --limit 10 --json
-
-# 7) Politicas y riesgo
-py scripts/multiuser_wallet_cli.py --store-file data/multiuser/wallet-ledger.json set-policy --user-id u-alice --can-transfer true --daily-limit 25 --json
-py scripts/multiuser_wallet_cli.py --store-file data/multiuser/wallet-ledger.json set-risk-profile --user-id u-alice --profile-name HIGH --transfer-alert-threshold 5 --daily-alert-threshold 12 --json
-py scripts/multiuser_wallet_cli.py --store-file data/multiuser/wallet-ledger.json list-alerts --user-id u-alice --limit 20 --json
-
-# 8) Renovar token cuando venza o no coincida
-py scripts/multiuser_wallet_cli.py --store-file data/multiuser/wallet-ledger.json refresh-token --user-id u-alice --wallet-id wallet_user_alpha_01 --current-token TOKEN_ANTERIOR --json
-```
-
-## Flujo de terminal interactiva (menu)
-
-Ejecucion:
+## Terminal interactivo
 
 ```bash
 py scripts/multiuser_terminal.py
 ```
 
-Secuencia recomendada:
-1. 1) create-user para Alice y Bob.
-2. 2) create-wallet para cada usuario.
-3. Guardar auth_token mostrado al crear wallet.
-4. 3) mint sobre wallet emisora.
-5. 4) transfer o 10) transfer-wizard con sender_token y nonce.
-6. 6) list-utxos + 7) verify-integrity.
-7. 8) snapshot para revisar estado global.
-8. 11) dashboard para metricas de sesion.
-9. 9) refresh-token cuando el token vence o no coincide.
-
-Comportamiento UX actual:
-- Alertas visuales [SUCCESS] / [ERROR].
-- Validacion preventiva de numericos (amount, fee) para evitar traceback.
-- Token de sender requerido explicitamente en transferencia interactiva.
-
-## Cuadro de actualizacion JSON
-
-| Componente | Comando / Accion | Actualiza JSON | Archivo |
-|---|---|---|---|
-| Simulador UTXO/Account | run con --persist | Si | data/simulation-runs/utxo-runs.json, data/simulation-runs/account-runs.json |
-| Simulador UTXO/Account | run sin --persist | No | No aplica |
-| Simulador UTXO/Account | --list-runs / --show-run-id | No | Solo lectura |
-| Multiusuario CLI | create-user | Si | data/multiuser/wallet-ledger.json |
-| Multiusuario CLI | create-wallet | Si | data/multiuser/wallet-ledger.json |
-| Multiusuario CLI | mint | Si | data/multiuser/wallet-ledger.json |
-| Multiusuario CLI | transfer | Si | data/multiuser/wallet-ledger.json |
-| Multiusuario CLI | refresh-token | Si | data/multiuser/wallet-ledger.json |
-| Multiusuario CLI | set-policy | Si | data/multiuser/wallet-ledger.json |
-| Multiusuario CLI | set-risk-profile | Si | data/multiuser/wallet-ledger.json |
-| Multiusuario CLI | balance/list-users/list-wallets/list-utxos/snapshot/list-revisions/get-policy/list-policies/get-risk-profile/list-risk-profiles/list-alerts/verify-integrity | No | Solo lectura |
-
-## Setup con PostgreSQL
-
-### 1. Configurar .env
-
-```bash
-cp .env.example .env
-# Editar .env con credenciales reales de PostgreSQL
-```
-
-El archivo `.env` se carga automaticamente por `config/settings.py`. Las variables de entorno del sistema toman precedencia sobre `.env`.
-
-### 2. Ejecutar migraciones
-
-```bash
-PYTHONPATH=. py migrations/migrate.py
-```
-
-Esto crea la base de datos si no existe y aplica:
-- V001: Tablas core (users, wallets, transfers, policies, risk_profiles, alerts, simulation_runs, traceability)
-- V002: Tablas de autenticacion (user_credentials, user_roles)
-
-### 3. Verificar backend activo
-
-Al iniciar `py scripts/multiuser_terminal.py`, el banner muestra:
-- **Verde**: `PostgreSQL (blockchain_data_model)` — leyendo/escribiendo en PG
-- **Amarillo**: `JSON (local files)` — leyendo/escribiendo en archivos JSON locales
-
-Si ves JSON pero esperabas PostgreSQL, verifica que `.env` tenga `PERSISTENCE_BACKEND=postgres` y `DATABASE_URL` correcto.
-
-### 4. Cambiar entre backends
-
-```bash
-# Modo PostgreSQL
-PERSISTENCE_BACKEND=postgres py scripts/multiuser_terminal.py
-
-# Modo JSON (default si no hay .env)
-PERSISTENCE_BACKEND=json py scripts/multiuser_terminal.py
-```
-
-Los datos de cada backend son independientes. Crear datos en JSON no los replica en PostgreSQL y viceversa.
-
-## Menu completo del terminal interactivo (v2.4.0)
+### Secciones del menu (v2.8.0)
 
 | # | Comando | Seccion | Descripcion |
 |---|---------|---------|-------------|
-| 1 | create-user | Usuarios & Wallets | Registrar nuevo usuario |
+| 1 | create-user | Usuarios & Wallets | Registrar nuevo usuario (ID auto-generado USR-XXXXX) |
 | 2 | create-wallet | Usuarios & Wallets | Crear wallet UTXO o ACCOUNT |
 | 9 | refresh-token | Usuarios & Wallets | Renovar token de autenticacion |
 | 12 | list-users | Usuarios & Wallets | Listar usuarios registrados |
 | 13 | balance | Usuarios & Wallets | Consultar balance de wallet |
 | 3 | mint | Transacciones | Emitir tokens a wallet |
-| 4 | transfer | Transacciones | Transferir fondos |
-| 10 | transfer-wizard | Transacciones | Asistente guiado con confirmacion |
+| 4 | transfer | Transacciones | Transferir fondos (con preview cross-currency) |
+| 10 | transfer-wizard | Transacciones | Asistente guiado con confirmacion y preview de conversion |
 | 14 | set-policy | Politicas & Riesgo | Configurar politica de transferencia |
 | 15 | get-policy | Politicas & Riesgo | Ver politica de un usuario |
 | 16 | list-policies | Politicas & Riesgo | Listar todas las politicas |
@@ -234,5 +98,310 @@ Los datos de cada backend son independientes. Crear datos en JSON no los replica
 | 7 | verify-integrity | Consultas | Verificar nonce + hash-chain |
 | 8 | snapshot | Consultas | Estado completo del ledger |
 | 21 | list-revisions | Consultas | Historial de revisiones |
-| 11 | dashboard | Sistema | Metricas de sesion |
+| 22 | set-exchange-rate | Exchange | Configurar tasa de cambio con comision |
+| 23 | list-exchange-rates | Exchange | Listar tasas de cambio activas |
+| 24 | convert | Exchange | Previsualizar conversion de divisa |
+| 25 | create-treasury-wallet | Tesoreria | Crear wallet de tesoreria por divisa |
+| 26 | list-treasury-wallets | Tesoreria | Listar wallets de tesoreria |
+| 27 | top-up | Tesoreria | Fondear wallet desde tesoreria |
+| 28 | grant-permission | Permisos | Otorgar permiso a un rol |
+| 29 | revoke-permission | Permisos | Revocar permiso a un rol |
+| 30 | list-role-permissions | Permisos | Listar permisos de un rol |
+| 31 | reset-role-permissions | Permisos | Resetear permisos de un rol a defaults |
+| 32 | grant-user-permission | Permisos | Otorgar permiso especifico a usuario |
+| 33 | revoke-user-permission | Permisos | Revocar permiso especifico de usuario |
+| 34 | list-user-permissions | Permisos | Listar permisos de usuario |
+| 35 | freeze-wallet | Moderacion | Congelar wallet(s) de usuario |
+| 36 | unfreeze-wallet | Moderacion | Descongelar wallet(s) de usuario |
+| 37 | ban-user | Moderacion | Banear usuario (congela wallets automaticamente) |
+| 38 | unban-user | Moderacion | Desbanear usuario (opcion de descongelar) |
+| 39 | update-user | Gestion de usuarios | Modificar ID o nombre de usuario |
+| 40 | delete-user | Gestion de usuarios | Eliminar usuario (soft delete) |
+| 41 | restore-user | Gestion de usuarios | Restaurar usuario eliminado |
+| 42 | generate-temp-password | Gestion de usuarios | Generar password temporal |
+| 43 | list-audit-log | Gestion de usuarios | Ver log de auditoria |
+| 44 | change-password | Sistema | Cambiar mi contrasena |
+| 45 | update-profile | Sistema | Actualizar mi perfil |
+| 11 | dashboard | Sistema | Metricas de sesion actual |
 | 0 | exit | Sistema | Salir del terminal |
+
+### Secuencia recomendada (primer uso)
+
+1. **Crear usuario ADMIN** (opcion 1) — guarda el `auth_token`.
+2. **Crear wallets** (opcion 2) — guarda el `wallet_token`.
+3. **Fondear con mint** (opcion 3) — requiere token de usuario.
+4. **Configurar tasa de cambio** (opcion 22) — si necesitas exchange.
+5. **Crear treasury wallet** (opcion 25) si usaras top-up.
+6. **Transferir** (opcion 4 o 10 wizard) — requiere wallet_token y nonce.
+7. **Verificar integridad** (opcion 7) y **snapshot** (opcion 8).
+8. **Consultar audit log** (opcion 43) para revisar todas las acciones.
+
+### Comportamientos especiales del terminal
+
+- **Banner CUENTA SUSPENDIDA**: aparece si el usuario intenta login con cuenta baneada o eliminada.
+- **Forced password change**: si `must_change_password: true`, el terminal bloquea el menu y exige cambio de password antes de continuar.
+- **Sudo re-validacion**: las secciones Moderacion (35-38) y Gestion (39-42) requieren introducir de nuevo las credenciales de ADMIN con JWT. Se permiten 3 intentos; palabra clave `refresh` para re-autenticar con nuevo token.
+- **Transfer-wizard**: para pares cross-currency muestra desglose completo (monto bruto, comision, monto neto) antes de confirmar.
+
+---
+
+## CLI paso a paso (multiusuario, v2.8.0)
+
+### 0. Preparacion
+
+```bash
+# Reset para corrida limpia (opcional)
+bash scripts/reset_persistence_json.sh
+
+# Ver todos los subcomandos disponibles
+py scripts/multiuser_wallet_cli.py --help
+```
+
+### 1. Crear usuarios
+
+```bash
+# ADMIN (primer usuario del sistema)
+py scripts/multiuser_wallet_cli.py create-user \
+  --display-name "Admin Principal" \
+  --email admin@empresa.com \
+  --username adminppal \
+  --role ADMIN \
+  --password "SecurePass123!" --json
+
+# OPERATOR (el user_id se auto-genera como USR-00002)
+py scripts/multiuser_wallet_cli.py create-user \
+  --display-name "Operador 1" \
+  --email op1@empresa.com \
+  --username op1 \
+  --role OPERATOR \
+  --password "Pass456!" --json
+```
+
+### 2. Login y obtencion de token
+
+```bash
+# Acepta user_id o username como identificador
+py scripts/multiuser_wallet_cli.py login \
+  --identifier adminppal \
+  --password "SecurePass123!" --json
+# Guarda el token retornado como ADMIN_TOKEN
+```
+
+### 3. Crear wallets
+
+```bash
+py scripts/multiuser_wallet_cli.py create-wallet \
+  --wallet-id wallet_admin_usd_01 \
+  --model UTXO \
+  --currency USD \
+  --token ADMIN_TOKEN --json
+# Guarda el auth_token de la wallet como WALLET_TOKEN
+```
+
+### 4. Fondear con mint
+
+```bash
+py scripts/multiuser_wallet_cli.py mint \
+  --wallet-id wallet_admin_usd_01 \
+  --amount 10000 \
+  --token ADMIN_TOKEN --json
+```
+
+### 5. Configurar exchange y tesoreria
+
+```bash
+# Configurar tasa USD -> EUR con 1% de comision
+py scripts/multiuser_wallet_cli.py set-exchange-rate \
+  --from-currency USD --to-currency EUR \
+  --rate 0.92 --commission 0.01 \
+  --token ADMIN_TOKEN
+
+# Crear wallet de tesoreria
+py scripts/multiuser_wallet_cli.py create-treasury-wallet \
+  --currency USD --token ADMIN_TOKEN --json
+
+# Top-up desde tesoreria
+py scripts/multiuser_wallet_cli.py top-up \
+  --wallet-id wallet_op_eur_01 \
+  --amount 500 \
+  --currency USD \
+  --token ADMIN_TOKEN --json
+```
+
+### 6. Transferencia con sender-token y nonce
+
+```bash
+py scripts/multiuser_wallet_cli.py transfer \
+  --from-wallet wallet_admin_usd_01 \
+  --to-wallet wallet_op_eur_01 \
+  --amount 100 --fee 0.5 \
+  --sender-token WALLET_TOKEN \
+  --expected-nonce 1 --json
+# Cross-currency: aplica tasa USD->EUR automaticamente
+```
+
+### 7. Gestion de usuarios (ADMIN)
+
+```bash
+# Generar password temporal para un usuario
+py scripts/multiuser_wallet_cli.py generate-temp-password \
+  --user-id USR-00002 --token ADMIN_TOKEN
+
+# Soft delete (congela wallets)
+py scripts/multiuser_wallet_cli.py delete-user \
+  --user-id USR-00002 --token ADMIN_TOKEN
+
+# Restaurar
+py scripts/multiuser_wallet_cli.py restore-user \
+  --user-id USR-00002 --token ADMIN_TOKEN
+
+# Actualizar perfil propio
+py scripts/multiuser_wallet_cli.py update-profile \
+  --first-name "Admin" --last-name "Principal" \
+  --token ADMIN_TOKEN
+```
+
+### 8. Moderacion
+
+```bash
+# Congelar todas las wallets de un usuario
+py scripts/multiuser_wallet_cli.py freeze-wallet \
+  --user-id USR-00002 --token ADMIN_TOKEN
+
+# Banear usuario (congela wallets automaticamente)
+py scripts/multiuser_wallet_cli.py ban-user \
+  --user-id USR-00002 --token ADMIN_TOKEN
+
+# Desbanear con descongelamiento opcional
+py scripts/multiuser_wallet_cli.py unban-user \
+  --user-id USR-00002 --token ADMIN_TOKEN
+```
+
+### 9. Permisos dinamicos
+
+```bash
+# Otorgar MINT a OPERATOR
+py scripts/multiuser_wallet_cli.py grant-permission \
+  --role OPERATOR --permission MINT --token ADMIN_TOKEN
+
+# Permiso especifico para un usuario
+py scripts/multiuser_wallet_cli.py grant-user-permission \
+  --user-id USR-00003 --permission SET_EXCHANGE_RATE \
+  --token ADMIN_TOKEN
+
+# Listar permisos efectivos de un rol
+py scripts/multiuser_wallet_cli.py list-role-permissions \
+  --role OPERATOR --token ADMIN_TOKEN
+```
+
+### 10. Consultas y auditoria
+
+```bash
+# Balance
+py scripts/multiuser_wallet_cli.py balance --wallet-id wallet_admin_usd_01 --json
+
+# UTXOs
+py scripts/multiuser_wallet_cli.py list-utxos --wallet-id wallet_admin_usd_01 --json
+
+# Integridad
+py scripts/multiuser_wallet_cli.py verify-integrity --json
+
+# Snapshot completo
+py scripts/multiuser_wallet_cli.py snapshot --json
+
+# Audit log completo
+py scripts/multiuser_wallet_cli.py list-audit-log --limit 100 --token ADMIN_TOKEN
+
+# Filtrar por accion
+py scripts/multiuser_wallet_cli.py list-audit-log --action TRANSFER --token ADMIN_TOKEN
+
+# Filtrar por usuario
+py scripts/multiuser_wallet_cli.py list-audit-log --user-id USR-00002 --token ADMIN_TOKEN
+```
+
+### 11. Cambiar password
+
+```bash
+py scripts/multiuser_wallet_cli.py change-password \
+  --current-password "SecurePass123!" \
+  --new-password "NewSecure456!" \
+  --token ADMIN_TOKEN
+```
+
+---
+
+## Tabla de actualizacion de persistencia
+
+| Operacion | Actualiza JSON/PG | Notas |
+|-----------|-------------------|-------|
+| create-user | Si | Crea UserRecord + credentials |
+| update-user | Si | Modifica user_id o display_name |
+| delete-user | Si | Soft delete: set deleted_at |
+| restore-user | Si | Limpia deleted_at |
+| update-profile | Si | Actualiza campos de perfil |
+| create-wallet | Si | Crea WalletRecord |
+| freeze-wallet | Si | Set frozen=True |
+| unfreeze-wallet | Si | Set frozen=False |
+| ban-user | Si | Set banned=True + freeze wallets |
+| unban-user | Si | Set banned=False |
+| mint | Si | Agrega UTXO o incrementa balance |
+| transfer | Si | Registra transferencia, actualiza UTXOs/balances |
+| top-up | Si | Debita tesoreria, acredita destino |
+| set-exchange-rate | Si | Actualiza par en exchange_rates |
+| generate-temp-password | Si | Set password_temp=True, token_temp |
+| change-password | Si | Actualiza hash, limpia password_temp |
+| grant/revoke permission | Si | Actualiza overrides de permisos |
+| login | Solo audit_log | No modifica wallets/users |
+| balance, list-*, snapshot, verify | No | Solo lectura |
+
+---
+
+## Setup con PostgreSQL
+
+### 1. Configurar .env
+
+```bash
+cp .env.example .env
+# Editar con credenciales reales
+```
+
+### 2. Ejecutar migraciones
+
+```bash
+PYTHONPATH=. py migrations/migrate.py
+```
+
+Aplica V001-V009. El migrador maneja `ALTER TYPE ADD VALUE` con autocommit para compatibilidad PostgreSQL.
+
+### 3. Verificar backend activo
+
+El banner del terminal muestra:
+- **Verde**: `PostgreSQL (blockchain_data_model)`
+- **Amarillo**: `JSON (local files)`
+
+### 4. Cambiar entre backends
+
+```bash
+PERSISTENCE_BACKEND=postgres py scripts/multiuser_terminal.py
+PERSISTENCE_BACKEND=json py scripts/multiuser_terminal.py
+```
+
+Los datos de cada backend son independientes.
+
+---
+
+## Flujo de sincronizacion de ramas
+
+```bash
+# Verificar estado de todas las ramas
+git fetch origin
+for branch in main develop production staging qa; do
+  echo "$branch: $(git log --oneline origin/$branch -1)"
+done
+
+# Promotion chain completo
+GH_BIN="/c/Program Files/GitHub CLI/gh.exe" bash scripts/devsecops_promotion_chain.sh basic-blockchain blockchain-data-model
+
+# Release completo desde develop
+GH_BIN="/c/Program Files/GitHub CLI/gh.exe" bash scripts/devsecops_release_and_promote.sh basic-blockchain blockchain-data-model develop
+```
