@@ -19,16 +19,22 @@ def test_save_and_load_roundtrip(clean_tables):
 
     store = PgMultiUserWalletStore()
     ledger = MultiUserWalletLedger()
+    wallet_id = "wallet_user_alpha_01"
 
     ledger.create_user("u-alice", "Alice")
-    token = ledger.create_wallet("u-alice", "w-alice", "ACCOUNT", "USDX")
-    ledger.mint("w-alice", "100.00000000", reference="seed")
+    ledger.create_wallet(
+        "u-alice",
+        wallet_id=wallet_id,
+        currency="USDX",
+        model="ACCOUNT",
+    )
+    ledger.mint(wallet_id, "100.00000000", reference="seed")
 
     revision_id = store.save_ledger(ledger)
     assert revision_id.startswith("rev-")
 
     loaded = store.load_ledger()
-    assert loaded.wallets["w-alice"].balance == ledger.wallets["w-alice"].balance
+    assert loaded.wallets[wallet_id].balance == ledger.wallets[wallet_id].balance
     assert len(loaded.transfers) == len(ledger.transfers)
     assert "u-alice" in loaded.users
 
