@@ -298,6 +298,9 @@ def _section_header(title: str) -> None:
 
 @dataclass
 class SessionState:
+    auth_user_id: str = ""
+    auth_roles: list[str] = field(default_factory=list)
+    jwt_token: str = ""
     last_action: str = "-"
     last_status: str = "-"
     last_message: str = "-"
@@ -574,17 +577,83 @@ def _persist(store, ledger):
 
 # ── Main loop ────────────────────────────────────────────
 
+def _auth_flow(store_file) -> SessionState:
+    """Login or register flow at terminal startup. Returns authenticated SessionState."""
+    from config.settings import get_settings
+
+    session = SessionState()
+    store, ledger = _load(store_file)
+    settings = get_settings()
+
+    if ledger.is_empty():
+        print()
+        print(_box_top())
+        print(_box_line(_yellow("  No hay usuarios registrados. Creando cuenta ADMIN inicial.")))
+        print(_box_bot())
+        print()
+        user_id = _prompt("user_id", hint="(sera el administrador)")
+        display_name = _prompt("display_name")
+        password = _prompt("password", hint="(min 4 caracteres)")
+        if not user_id or not display_name or len(password) < 4:
+            print(_red("  Datos invalidos. Reinicia el terminal."))
+            raise SystemExit(1)
+        ledger.create_user(user_id, display_name, password=password)
+        ledger.assign_role(user_id, "ADMIN")
+        store.save_ledger(ledger)
+        _print_result_box("SUCCESS", "bootstrap", f"Usuario ADMIN '{user_id}' creado. Ahora inicia sesion.")
+
+    print()
+    print(_box_top())
+    print(_box_line(_cyan("  INICIAR SESION")))
+    print(_box_bot())
+    print()
+
+    for attempt in range(3):
+        user_id = _prompt("user_id")
+        password = _prompt("password")
+        if not settings.jwt_secret:
+            print(_red("  JWT_SECRET no configurado en .env"))
+            raise SystemExit(1)
+        result = ledger.login(user_id, password, settings.jwt_secret, settings.jwt_ttl_seconds)
+        if isinstance(result, dict):
+            session.auth_user_id = result["user_id"]
+            session.auth_roles = result["roles"]
+            session.jwt_token = result["access_token"]
+            _print_result_box("SUCCESS", "login", f"Bienvenido {user_id} [{', '.join(result['roles']) or 'sin roles'}]")
+            return session
+        _print_result_box("ERROR", "login", str(result))
+        if attempt < 2:
+            print(_dim(f"  Intentos restantes: {2 - attempt}"))
+
+    print(_red("  Maximo de intentos alcanzado. Saliendo."))
+    raise SystemExit(1)
+
+
 def main() -> None:
     store_file = DEFAULT_STORE
-    session = SessionState()
 
     _print_banner()
     print(_dim(f"  Store: {store_file}"))
-    print()
+
+    session = _auth_flow(store_file)
+
+    from domain.auth import Permission, has_permission
+
+    OPTION_PERMISSIONS = {
+        "1": Permission.CREATE_USER, "2": Permission.CREATE_WALLET,
+        "3": Permission.MINT, "4": Permission.TRANSFER, "10": Permission.TRANSFER,
+        "9": Permission.VIEW_WALLETS, "12": Permission.VIEW_USERS, "13": Permission.VIEW_WALLETS,
+        "5": Permission.VIEW_WALLETS, "6": Permission.VIEW_WALLETS,
+        "7": Permission.VIEW_WALLETS, "8": Permission.VIEW_WALLETS, "21": Permission.VIEW_REVISIONS,
+        "14": Permission.SET_POLICY, "15": Permission.VIEW_POLICIES, "16": Permission.VIEW_POLICIES,
+        "17": Permission.SET_RISK_PROFILE, "18": Permission.VIEW_RISK_PROFILES,
+        "19": Permission.VIEW_RISK_PROFILES, "20": Permission.VIEW_ALERTS,
+    }
 
     while True:
         _print_pending_feedback(session)
         _print_menu()
+        print(_dim(f"  Usuario: {_bold(session.auth_user_id)} [{', '.join(session.auth_roles)}]"))
 
         option = input(f"\n  {_cyan('›')} {_bold('Opcion')}: ").strip()
 
@@ -595,6 +664,11 @@ def main() -> None:
             print(_box_bot())
             print()
             break
+
+        required_perm = OPTION_PERMISSIONS.get(option)
+        if required_perm and not has_permission(session.auth_roles, required_perm):
+            _print_result_box("ERROR", "permiso-denegado", f"Se requiere: {required_perm}. Tus roles: {', '.join(session.auth_roles) or 'ninguno'}")
+            continue
 
         try:
             store, ledger = _load(store_file)
