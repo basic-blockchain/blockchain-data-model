@@ -34,6 +34,25 @@ FILE_PATTERN = re.compile(r"^V(\d+)__.*\.sql$")
 DEFAULT_DB_NAME = "blockchain_data_model"
 
 
+def _load_dotenv() -> None:
+    """Load .env from project root, preserving explicit environment variables."""
+    env_path = Path(__file__).resolve().parents[1] / ".env"
+    if not env_path.exists():
+        return
+
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip()
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
 def _parse_dsn(dsn: str) -> tuple[str, str]:
     """Extract the database name and build a maintenance DSN pointing to 'postgres'."""
     parsed = urlparse(dsn)
@@ -90,6 +109,7 @@ def _pending_files(current: int) -> list[tuple[int, Path]]:
 
 
 def migrate(dsn: str | None = None) -> None:
+    _load_dotenv()
     dsn = dsn or os.environ.get("DATABASE_URL", "")
     if not dsn:
         print("DATABASE_URL environment variable is required.", file=sys.stderr)

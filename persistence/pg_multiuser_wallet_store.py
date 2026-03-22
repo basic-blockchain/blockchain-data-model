@@ -12,6 +12,18 @@ from persistence.pg_connection import get_connection
 
 class PgMultiUserWalletStore(WalletLedgerRepository):
 
+    REQUIRED_TABLES = (
+        "users",
+        "wallets",
+        "user_policies",
+        "user_risk_profiles",
+        "wallet_nonces",
+        "wallet_utxos",
+        "transfers",
+        "alerts",
+        "ledger_revisions",
+    )
+
     def load_ledger(self) -> MultiUserWalletLedger:
         snapshot = self._read_snapshot()
         return MultiUserWalletLedger.from_snapshot(snapshot)
@@ -30,8 +42,11 @@ class PgMultiUserWalletStore(WalletLedgerRepository):
                 self._sync_transfers(cur, snapshot.get("transfers", []))
                 self._sync_alerts(cur, snapshot.get("alerts", []))
                 self._sync_nonces(cur, ledger)
-                self._upsert_credentials(cur, snapshot.get("credentials", []))
-                self._sync_roles(cur, snapshot.get("roles", []))
+                # Backward compatibility: old PG schemas may not have auth/RBAC tables yet.
+                if self._table_exists(cur, "user_credentials"):
+                    self._upsert_credentials(cur, snapshot.get("credentials", []))
+                if self._table_exists(cur, "user_roles"):
+                    self._sync_roles(cur, snapshot.get("roles", []))
                 self._insert_revision(cur, revision_id, snapshot)
 
         return revision_id
@@ -67,6 +82,13 @@ class PgMultiUserWalletStore(WalletLedgerRepository):
     def _read_snapshot(self) -> dict:
         with get_connection() as conn:
             with conn.cursor() as cur:
+                missing_required = [name for name in self.REQUIRED_TABLES if not self._table_exists(cur, name)]
+                if missing_required:
+                    missing = ", ".join(missing_required)
+                    raise RuntimeError(
+                        "Esquema PostgreSQL incompleto. Faltan tablas requeridas: "
+                        f"{missing}. Ejecuta: PYTHONPATH=. py migrations/migrate.py"
+                    )
                 users = self._fetch_users(cur)
                 wallets = self._fetch_wallets(cur)
                 policies = self._fetch_policies(cur)
@@ -74,8 +96,14 @@ class PgMultiUserWalletStore(WalletLedgerRepository):
                 utxos = self._fetch_utxos(cur)
                 transfers = self._fetch_transfers(cur)
                 alerts = self._fetch_alerts(cur)
-                credentials = self._fetch_credentials(cur)
-                roles = self._fetch_roles(cur)
+                if self._table_exists(cur, "user_credentials"):
+                    credentials = self._fetch_credentials(cur)
+                else:
+                    credentials = []
+                if self._table_exists(cur, "user_roles"):
+                    roles = self._fetch_roles(cur)
+                else:
+                    roles = []
 
         return {
             "users": users,
@@ -424,3 +452,8 @@ class PgMultiUserWalletStore(WalletLedgerRepository):
     def _generate_revision_id() -> str:
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         return f"rev-{stamp}-{secrets.token_hex(4)}"
+
+    @staticmethod
+    def _table_exists(cur, table_name: str) -> bool:
+        cur.execute("SELECT to_regclass(%s)", (table_name,))
+        return cur.fetchone()[0] is not None
