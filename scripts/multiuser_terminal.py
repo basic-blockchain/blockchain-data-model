@@ -197,6 +197,7 @@ OPERATOR_MENU = [
         ("7", "verify-integrity", "Verificar integridad"),
     ]),
     ("SISTEMA", [
+        ("11", "dashboard", "Metricas de sesion"),
         ("0", "exit", "Salir"),
     ]),
 ]
@@ -217,6 +218,7 @@ VIEWER_MENU = [
         ("7", "verify-integrity", "Verificar integridad"),
     ]),
     ("SISTEMA", [
+        ("11", "dashboard", "Metricas de sesion"),
         ("0", "exit", "Salir"),
     ]),
 ]
@@ -1064,8 +1066,33 @@ def _cmd_snapshot(ctx: CommandContext) -> None:
 
 def _cmd_refresh_token(ctx: CommandContext) -> None:
     _section_header("REFRESH TOKEN")
-    user_id = _prompt("user_id")
-    wallet_id = _prompt("wallet_id")
+    is_admin = "ADMIN" in ctx.session.auth_roles
+    if is_admin:
+        user_id = _prompt("user_id")
+        wallet_id = _prompt("wallet_id")
+    else:
+        user_id = ctx.session.auth_user_id
+        my_wallets = ctx.ledger.list_wallets(user_id=user_id)
+        if not my_wallets:
+            _print_result_box("ERROR", "refresh-token", "No tienes wallets creadas.")
+            raise _SkipCommand
+        if len(my_wallets) == 1:
+            wallet_id = my_wallets[0]["wallet_id"]
+            print(_dim(f"  Wallet: {wallet_id}"))
+        else:
+            print()
+            print(_box_top())
+            print(_box_line(_cyan("  Tus wallets:")))
+            print(_box_mid())
+            for i, w in enumerate(my_wallets, 1):
+                print(_box_line(f"  {_yellow(f'[{i}]')} {w['wallet_id']}  {_dim(w['model'])}"))
+            print(_box_bot())
+            sel = _prompt("Selecciona", hint=f"1-{len(my_wallets)}")
+            try:
+                wallet_id = my_wallets[int(sel) - 1]["wallet_id"]
+            except (ValueError, IndexError):
+                _print_result_box("ERROR", "refresh-token", "Seleccion invalida.")
+                raise _SkipCommand
     current_token = _prompt("current_token", hint="(opcional)")
     input_units = _measure_units(user_id, wallet_id, current_token)
     started_at = time.perf_counter()
