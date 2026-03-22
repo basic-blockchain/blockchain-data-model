@@ -214,6 +214,9 @@ class MultiUserWalletLedger:
             return None
         return min(values)
 
+    def is_empty(self) -> bool:
+        return len(self.users) == 0
+
     def create_user(self, user_id: str, display_name: str, password: str = "") -> str:
         if not user_id or not display_name:
             return "Error: user_id y display_name son requeridos."
