@@ -809,9 +809,9 @@ class MultiUserWalletLedger:
         receiver = self.wallets[receiver_wallet]
         self._refresh_wallet_token_if_expired(receiver)
         if sender.model != receiver.model:
-            return "Error: transfer entre wallets de distinto modelo no soportada."
+            return f"Error: no se puede transferir entre modelos diferentes ({sender.model} -> {receiver.model})."
         if sender.currency != receiver.currency:
-            return "Error: transfer entre wallets de distinta moneda no soportada."
+            return f"Error: no se puede transferir entre monedas diferentes ({sender.currency} -> {receiver.currency}). Ambas wallets deben tener la misma moneda."
 
         if not sender_token.strip():
             return "Error: sender_token es requerido para transferir."

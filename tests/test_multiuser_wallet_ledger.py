@@ -290,6 +290,36 @@ def test_refresh_wallet_token_rejects_non_owner():
     assert "no es propietario" in error
 
 
+def test_transfer_rejects_cross_currency():
+    ledger = MultiUserWalletLedger()
+    ledger.create_user("u-a", "A")
+    ledger.create_user("u-b", "B")
+    created = ledger.create_wallet("u-a", wallet_id="wallet_user_alpha_01", currency="BTC")
+    ledger.create_wallet("u-b", wallet_id="wallet_user_bravo_02", currency="SOL")
+    ledger.mint("wallet_user_alpha_01", "100")
+    error = ledger.transfer(
+        "wallet_user_alpha_01", "wallet_user_bravo_02", "10",
+        sender_token=created["auth_token"],
+    )
+    assert "monedas diferentes" in error
+    assert "BTC" in error
+    assert "SOL" in error
+
+
+def test_transfer_rejects_cross_model():
+    ledger = MultiUserWalletLedger()
+    ledger.create_user("u-a", "A")
+    ledger.create_user("u-b", "B")
+    created = ledger.create_wallet("u-a", wallet_id="wallet_user_alpha_01", model="UTXO")
+    ledger.create_wallet("u-b", wallet_id="wallet_user_bravo_02", model="ACCOUNT")
+    ledger.mint("wallet_user_alpha_01", "100")
+    error = ledger.transfer(
+        "wallet_user_alpha_01", "wallet_user_bravo_02", "10",
+        sender_token=created["auth_token"],
+    )
+    assert "modelos diferentes" in error
+
+
 def test_transfer_rejects_invalid_expected_nonce():
     ledger = MultiUserWalletLedger()
     ledger.create_user("u-a", "A")
@@ -370,4 +400,4 @@ def test_transfer_rejects_between_different_models():
         fee="0",
         sender_token=created["auth_token"],
     )
-    assert "distinto modelo" in error
+    assert "modelos diferentes" in error
