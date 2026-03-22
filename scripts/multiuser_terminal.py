@@ -1114,7 +1114,29 @@ def main() -> None:
 
         elif option == "13":
             _section_header("CONSULTAR BALANCE")
-            wallet_id = _prompt("wallet_id")
+            wallet_id = _prompt("wallet_id", hint="(vacio = mostrar todas tus wallets)")
+            if not wallet_id:
+                user_wallets = ledger.list_wallets(user_id=session.auth_user_id)
+                if not user_wallets:
+                    _print_result_box("ERROR", "balance", "No tienes wallets creadas.")
+                    continue
+                if len(user_wallets) == 1:
+                    wallet_id = user_wallets[0]["wallet_id"]
+                else:
+                    print()
+                    print(_box_top())
+                    print(_box_line(_cyan("  Tus wallets:")))
+                    print(_box_mid())
+                    for i, w in enumerate(user_wallets, 1):
+                        print(_box_line(f"  {_yellow(f'[{i}]')} {w['wallet_id']}  {_dim(w['model'])}  {_bold(w['balance'])} {w['currency']}"))
+                    print(_box_bot())
+                    sel = _prompt("Selecciona", hint=f"1-{len(user_wallets)}")
+                    try:
+                        idx = int(sel) - 1
+                        wallet_id = user_wallets[idx]["wallet_id"]
+                    except (ValueError, IndexError):
+                        _print_result_box("ERROR", "balance", "Seleccion invalida.")
+                        continue
             input_units = _measure_units(wallet_id)
             started_at = time.perf_counter()
             balance = ledger.get_wallet_balance(wallet_id)

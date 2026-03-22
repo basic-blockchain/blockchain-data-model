@@ -275,9 +275,9 @@ def main() -> None:
     cmd_transfer.add_argument("--sender-token", default="")
     cmd_transfer.add_argument("--expected-nonce", type=int)
 
-    cmd_balance = subparsers.add_parser("balance", help="Get wallet balance")
+    cmd_balance = subparsers.add_parser("balance", help="Get wallet balance (omit --wallet-id to see all your wallets)")
     _add_json_flag(cmd_balance)
-    cmd_balance.add_argument("--wallet-id", required=True)
+    cmd_balance.add_argument("--wallet-id", default="")
 
     cmd_users = subparsers.add_parser("list-users", help="List all users")
     _add_json_flag(cmd_users)
@@ -435,8 +435,14 @@ def main() -> None:
 
         # ── Viewer commands (any authenticated user) ──
         elif args.command == "balance":
-            _require_auth(Permission.VIEW_WALLETS)
-            result = {"wallet_id": args.wallet_id, "balance": str(ledger.get_wallet_balance(args.wallet_id))}
+            payload = _require_auth(Permission.VIEW_WALLETS)
+            wallet_id = args.wallet_id
+            if not wallet_id:
+                caller_id = payload.get("sub", "")
+                user_wallets = ledger.list_wallets(user_id=caller_id)
+                result = [{"wallet_id": w["wallet_id"], "model": w["model"], "currency": w["currency"], "balance": w["balance"]} for w in user_wallets]
+            else:
+                result = {"wallet_id": wallet_id, "balance": str(ledger.get_wallet_balance(wallet_id))}
         elif args.command == "list-users":
             _require_auth(Permission.VIEW_USERS)
             result = ledger.list_users()
