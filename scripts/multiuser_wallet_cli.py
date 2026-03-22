@@ -245,6 +245,18 @@ def main() -> None:
     cmd_user.add_argument("--user-id", required=True)
     cmd_user.add_argument("--display-name", required=True)
     cmd_user.add_argument("--password", default="")
+    cmd_user.add_argument("--first-name", default="")
+    cmd_user.add_argument("--last-name", default="")
+    cmd_user.add_argument("--email", default="")
+    cmd_user.add_argument("--username", default="")
+
+    cmd_update_profile = subparsers.add_parser("update-profile", help="Update user profile (own or ADMIN for others)")
+    _add_json_flag(cmd_update_profile)
+    cmd_update_profile.add_argument("--user-id", required=True)
+    cmd_update_profile.add_argument("--first-name", default="")
+    cmd_update_profile.add_argument("--last-name", default="")
+    cmd_update_profile.add_argument("--email", default="")
+    cmd_update_profile.add_argument("--username", default="")
 
     cmd_wallet = subparsers.add_parser("create-wallet", help="Create a wallet for an existing user")
     _add_json_flag(cmd_wallet)
@@ -331,11 +343,119 @@ def main() -> None:
     cmd_list_alerts.add_argument("--severity", default="")
     cmd_list_alerts.add_argument("--limit", type=int, default=50)
 
+    cmd_set_exchange_rate = subparsers.add_parser("set-exchange-rate", help="Set exchange rate between two currencies (ADMIN only)")
+    _add_json_flag(cmd_set_exchange_rate)
+    cmd_set_exchange_rate.add_argument("--from-currency", required=True)
+    cmd_set_exchange_rate.add_argument("--to-currency", required=True)
+    cmd_set_exchange_rate.add_argument("--rate", required=True)
+    cmd_set_exchange_rate.add_argument("--commission", default="1.0")
+
+    cmd_list_exchange_rates = subparsers.add_parser("list-exchange-rates", help="List all configured exchange rates")
+    _add_json_flag(cmd_list_exchange_rates)
+
+    # ── Treasury commands ──
+    cmd_create_treasury_wallet = subparsers.add_parser("create-treasury-wallet", help="Create a treasury wallet (ADMIN only)")
+    _add_json_flag(cmd_create_treasury_wallet)
+    cmd_create_treasury_wallet.add_argument("--currency", default="USDX")
+    cmd_create_treasury_wallet.add_argument("--model", default="ACCOUNT", choices=["ACCOUNT", "UTXO", "account", "utxo"])
+
+    cmd_list_treasury_wallets = subparsers.add_parser("list-treasury-wallets", help="List treasury wallets")
+    _add_json_flag(cmd_list_treasury_wallets)
+
+    cmd_top_up = subparsers.add_parser("top-up", help="Top up a wallet from treasury (ADMIN only)")
+    _add_json_flag(cmd_top_up)
+    cmd_top_up.add_argument("--treasury-wallet-id", required=True)
+    cmd_top_up.add_argument("--target-wallet-id", required=True)
+    cmd_top_up.add_argument("--amount", required=True)
+    cmd_top_up.add_argument("--reference", default="TOP_UP")
+
+    # ── Permission management commands ──
+    cmd_grant_perm = subparsers.add_parser("grant-permission", help="Grant permission to a role (ADMIN only)")
+    _add_json_flag(cmd_grant_perm)
+    cmd_grant_perm.add_argument("--role", required=True)
+    cmd_grant_perm.add_argument("--permission", required=True)
+
+    cmd_revoke_perm = subparsers.add_parser("revoke-permission", help="Revoke permission from a role (ADMIN only)")
+    _add_json_flag(cmd_revoke_perm)
+    cmd_revoke_perm.add_argument("--role", required=True)
+    cmd_revoke_perm.add_argument("--permission", required=True)
+
+    cmd_grant_user_perm = subparsers.add_parser("grant-user-permission", help="Grant permission to a user (ADMIN only)")
+    _add_json_flag(cmd_grant_user_perm)
+    cmd_grant_user_perm.add_argument("--user-id", required=True)
+    cmd_grant_user_perm.add_argument("--permission", required=True)
+
+    cmd_revoke_user_perm = subparsers.add_parser("revoke-user-permission", help="Revoke permission from a user (ADMIN only)")
+    _add_json_flag(cmd_revoke_user_perm)
+    cmd_revoke_user_perm.add_argument("--user-id", required=True)
+    cmd_revoke_user_perm.add_argument("--permission", required=True)
+
+    cmd_list_role_perms = subparsers.add_parser("list-role-permissions", help="List effective permissions for a role")
+    _add_json_flag(cmd_list_role_perms)
+    cmd_list_role_perms.add_argument("--role", required=True)
+
+    cmd_list_user_perms = subparsers.add_parser("list-user-permissions", help="List direct permissions for a user")
+    _add_json_flag(cmd_list_user_perms)
+    cmd_list_user_perms.add_argument("--user-id", required=True)
+
+    cmd_reset_role_perms = subparsers.add_parser("reset-role-permissions", help="Reset role permissions to defaults (ADMIN only)")
+    _add_json_flag(cmd_reset_role_perms)
+    cmd_reset_role_perms.add_argument("--role", required=True)
+
     cmd_verify_integrity = subparsers.add_parser(
         "verify-integrity",
         help="Verify transfer nonce and hash-chain integrity",
     )
     _add_json_flag(cmd_verify_integrity)
+
+    # ── Moderation commands ──
+    cmd_freeze_wallet = subparsers.add_parser("freeze-wallet", help="Freeze a wallet (ADMIN only)")
+    _add_json_flag(cmd_freeze_wallet)
+    cmd_freeze_wallet.add_argument("--wallet-id", required=True)
+
+    cmd_unfreeze_wallet = subparsers.add_parser("unfreeze-wallet", help="Unfreeze a wallet (ADMIN only)")
+    _add_json_flag(cmd_unfreeze_wallet)
+    cmd_unfreeze_wallet.add_argument("--wallet-id", required=True)
+
+    cmd_ban_user = subparsers.add_parser("ban-user", help="Ban a user and freeze their wallets (ADMIN only)")
+    _add_json_flag(cmd_ban_user)
+    cmd_ban_user.add_argument("--user-id", required=True)
+
+    cmd_unban_user = subparsers.add_parser("unban-user", help="Unban a user (ADMIN only)")
+    _add_json_flag(cmd_unban_user)
+    cmd_unban_user.add_argument("--user-id", required=True)
+    cmd_unban_user.add_argument("--unfreeze-wallets", type=_parse_optional_bool, default=True)
+
+    # ── User management commands ──
+    cmd_update_user = subparsers.add_parser("update-user", help="Update user ID or display name (ADMIN only)")
+    _add_json_flag(cmd_update_user)
+    cmd_update_user.add_argument("--user-id", required=True)
+    cmd_update_user.add_argument("--new-user-id", default="")
+    cmd_update_user.add_argument("--new-display-name", default="")
+
+    cmd_delete_user = subparsers.add_parser("delete-user", help="Soft-delete a user (ADMIN only)")
+    _add_json_flag(cmd_delete_user)
+    cmd_delete_user.add_argument("--user-id", required=True)
+
+    cmd_restore_user = subparsers.add_parser("restore-user", help="Restore a soft-deleted user (ADMIN only)")
+    _add_json_flag(cmd_restore_user)
+    cmd_restore_user.add_argument("--user-id", required=True)
+    cmd_restore_user.add_argument("--unfreeze-wallets", type=_parse_optional_bool, default=True)
+
+    cmd_gen_temp_pw = subparsers.add_parser("generate-temp-password", help="Generate temporary password for a user (ADMIN only)")
+    _add_json_flag(cmd_gen_temp_pw)
+    cmd_gen_temp_pw.add_argument("--user-id", required=True)
+
+    cmd_change_pw = subparsers.add_parser("change-password", help="Change your own password")
+    _add_json_flag(cmd_change_pw)
+    cmd_change_pw.add_argument("--current-password", required=True)
+    cmd_change_pw.add_argument("--new-password", required=True)
+
+    cmd_audit = subparsers.add_parser("list-audit-log", help="List audit log entries (ADMIN only)")
+    _add_json_flag(cmd_audit)
+    cmd_audit.add_argument("--user-id", default="")
+    cmd_audit.add_argument("--action", default="")
+    cmd_audit.add_argument("--limit", type=int, default=50)
 
     args = parser.parse_args()
     store_file = Path(args.store_file)
@@ -393,7 +513,11 @@ def main() -> None:
         # ── Admin-only commands ──
         elif args.command == "create-user":
             _require_auth(Permission.CREATE_USER)
-            result = ledger.create_user(args.user_id, args.display_name, password=getattr(args, "password", ""))
+            result = ledger.create_user(args.user_id, args.display_name, password=getattr(args, "password", ""), first_name=getattr(args, "first_name", ""), last_name=getattr(args, "last_name", ""), email=getattr(args, "email", ""), username=getattr(args, "username", ""))
+            mutate = True
+        elif args.command == "update-profile":
+            _require_auth(Permission.UPDATE_PROFILE)
+            result = ledger.update_profile(args.user_id, first_name=args.first_name or None, last_name=args.last_name or None, email=args.email or None, username=args.username or None)
             mutate = True
         elif args.command == "assign-role":
             _require_auth(Permission.ASSIGN_ROLE)
@@ -420,6 +544,100 @@ def main() -> None:
             _require_auth(Permission.TRANSFER)
             result = ledger.transfer(args.from_wallet, args.to_wallet, args.amount, fee=args.fee, reference=args.reference, sender_token=args.sender_token, expected_nonce=getattr(args, "expected_nonce", None))
             mutate = True
+
+        # ── Exchange commands ──
+        elif args.command == "set-exchange-rate":
+            _require_auth(Permission.SET_EXCHANGE_RATE)
+            result = ledger.set_exchange_rate(args.from_currency, args.to_currency, args.rate, commission_pct=args.commission)
+            mutate = True
+        elif args.command == "list-exchange-rates":
+            _require_auth(Permission.EXCHANGE)
+            result = ledger.list_exchange_rates()
+
+        # ── Treasury commands ──
+        elif args.command == "create-treasury-wallet":
+            _require_auth(Permission.TOP_UP)
+            result = ledger.create_treasury_wallet(currency=args.currency, model=args.model.upper())
+            mutate = True
+        elif args.command == "list-treasury-wallets":
+            _require_auth(Permission.TOP_UP)
+            result = ledger.list_treasury_wallets()
+        elif args.command == "top-up":
+            _require_auth(Permission.TOP_UP)
+            result = ledger.top_up(args.treasury_wallet_id, args.target_wallet_id, args.amount, reference=args.reference)
+            mutate = True
+
+        # ── Permission management ──
+        elif args.command == "grant-permission":
+            _require_auth(Permission.MANAGE_PERMISSIONS)
+            result = ledger.grant_role_permission(args.role, args.permission)
+            mutate = True
+        elif args.command == "revoke-permission":
+            _require_auth(Permission.MANAGE_PERMISSIONS)
+            result = ledger.revoke_role_permission(args.role, args.permission)
+            mutate = True
+        elif args.command == "grant-user-permission":
+            _require_auth(Permission.MANAGE_PERMISSIONS)
+            result = ledger.grant_user_permission(args.user_id, args.permission)
+            mutate = True
+        elif args.command == "revoke-user-permission":
+            _require_auth(Permission.MANAGE_PERMISSIONS)
+            result = ledger.revoke_user_permission(args.user_id, args.permission)
+            mutate = True
+        elif args.command == "list-role-permissions":
+            _require_auth(Permission.MANAGE_PERMISSIONS)
+            result = ledger.list_role_permissions(args.role)
+        elif args.command == "list-user-permissions":
+            _require_auth(Permission.MANAGE_PERMISSIONS)
+            result = ledger.list_user_permissions(args.user_id)
+        elif args.command == "reset-role-permissions":
+            _require_auth(Permission.MANAGE_PERMISSIONS)
+            result = ledger.reset_role_permissions(args.role)
+            mutate = True
+
+        # ── Moderation commands ──
+        elif args.command == "freeze-wallet":
+            _require_auth(Permission.FREEZE_WALLET)
+            result = ledger.freeze_wallet(args.wallet_id)
+            mutate = True
+        elif args.command == "unfreeze-wallet":
+            _require_auth(Permission.UNFREEZE_WALLET)
+            result = ledger.unfreeze_wallet(args.wallet_id)
+            mutate = True
+        elif args.command == "ban-user":
+            _require_auth(Permission.BAN_USER)
+            result = ledger.ban_user(args.user_id)
+            mutate = True
+        elif args.command == "unban-user":
+            _require_auth(Permission.UNBAN_USER)
+            result = ledger.unban_user(args.user_id, unfreeze_wallets=args.unfreeze_wallets)
+            mutate = True
+
+        # ── User management commands ──
+        elif args.command == "update-user":
+            _require_auth(Permission.UPDATE_USER)
+            result = ledger.update_user(args.user_id, new_user_id=args.new_user_id or None, new_display_name=args.new_display_name or None)
+            mutate = True
+        elif args.command == "delete-user":
+            _require_auth(Permission.DELETE_USER)
+            result = ledger.delete_user(args.user_id)
+            mutate = True
+        elif args.command == "restore-user":
+            _require_auth(Permission.RESTORE_USER)
+            result = ledger.restore_user(args.user_id, unfreeze_wallets=args.unfreeze_wallets)
+            mutate = True
+        elif args.command == "generate-temp-password":
+            _require_auth(Permission.GENERATE_TEMP_PASSWORD)
+            result = ledger.generate_temp_password_for_user(args.user_id)
+            mutate = True
+        elif args.command == "change-password":
+            payload = _require_auth(Permission.TRANSFER)
+            caller_id = payload.get("sub", "")
+            result = ledger.change_password(caller_id, args.current_password, args.new_password)
+            mutate = True
+        elif args.command == "list-audit-log":
+            _require_auth(Permission.VIEW_AUDIT_LOG)
+            result = ledger.list_audit_log(limit=args.limit, user_id=args.user_id, action=args.action)
 
         # ── Admin commands (ADMIN only) ──
         elif args.command == "set-policy":

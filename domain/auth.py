@@ -34,6 +34,20 @@ class Permission(str, Enum):
     VIEW_POLICIES = "VIEW_POLICIES"
     VIEW_RISK_PROFILES = "VIEW_RISK_PROFILES"
     VIEW_REVISIONS = "VIEW_REVISIONS"
+    EXCHANGE = "EXCHANGE"
+    SET_EXCHANGE_RATE = "SET_EXCHANGE_RATE"
+    TOP_UP = "TOP_UP"
+    MANAGE_PERMISSIONS = "MANAGE_PERMISSIONS"
+    FREEZE_WALLET = "FREEZE_WALLET"
+    UNFREEZE_WALLET = "UNFREEZE_WALLET"
+    BAN_USER = "BAN_USER"
+    UNBAN_USER = "UNBAN_USER"
+    UPDATE_USER = "UPDATE_USER"
+    DELETE_USER = "DELETE_USER"
+    RESTORE_USER = "RESTORE_USER"
+    GENERATE_TEMP_PASSWORD = "GENERATE_TEMP_PASSWORD"
+    VIEW_AUDIT_LOG = "VIEW_AUDIT_LOG"
+    UPDATE_PROFILE = "UPDATE_PROFILE"
 
 
 ROLE_PERMISSIONS: dict[str, set[str]] = {
@@ -41,7 +55,9 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
     Role.OPERATOR: {
         Permission.CREATE_WALLET,
         Permission.TRANSFER,
+        Permission.EXCHANGE,
         Permission.MINT,
+        Permission.UPDATE_PROFILE,
         Permission.VIEW_USERS,
         Permission.VIEW_WALLETS,
         Permission.VIEW_TRANSFERS,
@@ -53,6 +69,8 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
     Role.VIEWER: {
         Permission.CREATE_WALLET,
         Permission.TRANSFER,
+        Permission.EXCHANGE,
+        Permission.UPDATE_PROFILE,
         Permission.VIEW_USERS,
         Permission.VIEW_WALLETS,
         Permission.VIEW_TRANSFERS,
@@ -64,12 +82,32 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
 }
 
 
-def has_permission(roles: list[str], permission: str) -> bool:
-    for role in roles:
-        role_perms = ROLE_PERMISSIONS.get(role, set())
-        if permission in role_perms:
+def has_permission(
+    roles: list[str],
+    permission: str,
+    *,
+    role_overrides: dict[str, list[str]] | None = None,
+    user_permissions: dict[str, list[str]] | None = None,
+    user_id: str | None = None,
+) -> bool:
+    if user_permissions and user_id and user_id in user_permissions:
+        if permission in user_permissions[user_id]:
             return True
+    for role in roles:
+        if role_overrides and role in role_overrides:
+            if permission in role_overrides[role]:
+                return True
+        else:
+            role_perms = ROLE_PERMISSIONS.get(role, set())
+            if permission in role_perms:
+                return True
     return False
+
+
+def effective_permissions(role: str, overrides: dict[str, list[str]] | None = None) -> set[str]:
+    if overrides and role in overrides:
+        return {p.value if hasattr(p, "value") else str(p) for p in overrides[role]}
+    return {p.value if hasattr(p, "value") else str(p) for p in ROLE_PERMISSIONS.get(role, set())}
 
 
 # ── Dataclasses ──────────────────────────────────────────
@@ -112,6 +150,15 @@ _ACTIVATION_ALPHABET = string.ascii_uppercase + string.digits
 
 def generate_invitation_token() -> str:
     return secrets.token_hex(16)
+
+
+def generate_temp_password() -> str:
+    alphabet = string.ascii_letters + string.digits + "!@#$%"
+    return "".join(secrets.choice(alphabet) for _ in range(12))
+
+
+def generate_temp_token() -> str:
+    return secrets.token_hex(32)
 
 
 def generate_activation_code() -> str:

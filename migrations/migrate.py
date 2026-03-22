@@ -108,6 +108,46 @@ def _pending_files(current: int) -> list[tuple[int, Path]]:
     return sorted(files, key=lambda x: x[0])
 
 
+_RE_ADD_ENUM_VALUE = re.compile(
+    r"^\s*ALTER\s+TYPE\s+\w+\s+ADD\s+VALUE\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _needs_autocommit(sql: str) -> bool:
+    """ALTER TYPE ... ADD VALUE cannot run inside a transaction in PostgreSQL."""
+    return bool(_RE_ADD_ENUM_VALUE.search(sql))
+
+
+def _apply_autocommit(dsn: str, sql: str, label: str) -> None:
+    """Execute SQL statements that require autocommit, one at a time.
+
+    Tolerates duplicate-object errors so partially-applied migrations
+    can be re-run safely (e.g. enum value or table already exists).
+    """
+    ac_conn = psycopg2.connect(dsn)
+    ac_conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+    try:
+        with ac_conn.cursor() as cur:
+            clean_lines = [ln for ln in sql.splitlines() if not ln.strip().startswith("--")]
+            clean_sql = "\n".join(clean_lines)
+            for raw_stmt in clean_sql.split(";"):
+                stmt = raw_stmt.strip()
+                if not stmt:
+                    continue
+                try:
+                    cur.execute(stmt)
+                except psycopg2.errors.DuplicateObject:
+                    print(f"  -> Skipped (already exists): {stmt[:60]}...")
+                except psycopg2.errors.DuplicateTable:
+                    print(f"  -> Skipped (table exists): {stmt[:60]}...")
+                except psycopg2.errors.DuplicateColumn:
+                    print(f"  -> Skipped (column exists): {stmt[:60]}...")
+        print(f"  -> Applied {label} (autocommit).")
+    finally:
+        ac_conn.close()
+
+
 def migrate(dsn: str | None = None) -> None:
     _load_dotenv()
     dsn = dsn or os.environ.get("DATABASE_URL", "")
@@ -130,12 +170,27 @@ def migrate(dsn: str | None = None) -> None:
                     print(f"Database is up to date (version {current}).")
                     return
 
-                for version, path in pending:
-                    sql = path.read_text(encoding="utf-8")
-                    print(f"Applying {path.name} (version {version})...")
-                    cur.execute(sql)
-                    print(f"  -> Applied successfully.")
+        for version, path in pending:
+            sql = path.read_text(encoding="utf-8")
+            print(f"Applying {path.name} (version {version})...")
 
+            if _needs_autocommit(sql):
+                _apply_autocommit(dsn, sql, path.name)
+            else:
+                with conn:
+                    with conn.cursor() as cur:
+                        cur.execute(sql)
+                        print(f"  -> Applied successfully.")
+
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO schema_migrations (version, label) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+                        (version, path.stem),
+                    )
+
+        with conn:
+            with conn.cursor() as cur:
                 final = _current_version(cur)
                 print(f"Migration complete. Current version: {final}.")
     finally:
