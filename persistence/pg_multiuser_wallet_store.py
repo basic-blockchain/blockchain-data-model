@@ -30,6 +30,8 @@ class PgMultiUserWalletStore(WalletLedgerRepository):
                 self._sync_transfers(cur, snapshot.get("transfers", []))
                 self._sync_alerts(cur, snapshot.get("alerts", []))
                 self._sync_nonces(cur, ledger)
+                self._upsert_credentials(cur, snapshot.get("credentials", []))
+                self._sync_roles(cur, snapshot.get("roles", []))
                 self._insert_revision(cur, revision_id, snapshot)
 
         return revision_id
@@ -72,6 +74,8 @@ class PgMultiUserWalletStore(WalletLedgerRepository):
                 utxos = self._fetch_utxos(cur)
                 transfers = self._fetch_transfers(cur)
                 alerts = self._fetch_alerts(cur)
+                credentials = self._fetch_credentials(cur)
+                roles = self._fetch_roles(cur)
 
         return {
             "users": users,
@@ -81,6 +85,8 @@ class PgMultiUserWalletStore(WalletLedgerRepository):
             "utxos": utxos,
             "transfers": transfers,
             "alerts": alerts,
+            "credentials": credentials,
+            "roles": roles,
         }
 
     def _fetch_users(self, cur) -> list[dict]:
@@ -217,6 +223,29 @@ class PgMultiUserWalletStore(WalletLedgerRepository):
             for r in cur.fetchall()
         ]
 
+    def _fetch_credentials(self, cur) -> list[dict]:
+        cur.execute("SELECT user_id, password_hash, created_at, updated_at FROM user_credentials")
+        return [
+            {
+                "user_id": r[0],
+                "password_hash": r[1],
+                "created_at": r[2].isoformat() if r[2] else "",
+                "updated_at": r[3].isoformat() if r[3] else "",
+            }
+            for r in cur.fetchall()
+        ]
+
+    def _fetch_roles(self, cur) -> list[dict]:
+        cur.execute("SELECT user_id, role, granted_at FROM user_roles")
+        return [
+            {
+                "user_id": r[0],
+                "role": r[1],
+                "granted_at": r[2].isoformat() if r[2] else "",
+            }
+            for r in cur.fetchall()
+        ]
+
     # ── Upsert / Sync helpers ────────────────────────────────
 
     def _upsert_users(self, cur, users: list[dict]) -> None:
@@ -346,6 +375,33 @@ class PgMultiUserWalletStore(WalletLedgerRepository):
                 VALUES (%s, %s)
                 """,
                 (wallet_id, nonce),
+            )
+
+    def _upsert_credentials(self, cur, credentials: list[dict]) -> None:
+        for c in credentials:
+            if not c.get("password_hash"):
+                continue
+            cur.execute(
+                """
+                INSERT INTO user_credentials (user_id, password_hash, created_at, updated_at)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (user_id) DO UPDATE SET
+                    password_hash = EXCLUDED.password_hash,
+                    updated_at = EXCLUDED.updated_at
+                """,
+                (c["user_id"], c["password_hash"], c.get("created_at"), c.get("updated_at")),
+            )
+
+    def _sync_roles(self, cur, roles: list[dict]) -> None:
+        cur.execute("DELETE FROM user_roles")
+        for r in roles:
+            cur.execute(
+                """
+                INSERT INTO user_roles (user_id, role, granted_at)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (user_id, role) DO NOTHING
+                """,
+                (r["user_id"], r["role"], r.get("granted_at")),
             )
 
     def _insert_revision(self, cur, revision_id: str, snapshot: dict) -> None:
