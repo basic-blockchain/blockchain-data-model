@@ -77,10 +77,11 @@ def test_operator_can_transfer_but_not_assign_roles():
     assert not has_permission([Role.OPERATOR], Permission.SET_POLICY)
 
 
-def test_viewer_can_only_read():
+def test_viewer_can_transfer_and_create_wallet_but_not_mint():
     assert has_permission([Role.VIEWER], Permission.VIEW_USERS)
     assert has_permission([Role.VIEWER], Permission.VIEW_WALLETS)
-    assert not has_permission([Role.VIEWER], Permission.TRANSFER)
+    assert has_permission([Role.VIEWER], Permission.TRANSFER)
+    assert has_permission([Role.VIEWER], Permission.CREATE_WALLET)
     assert not has_permission([Role.VIEWER], Permission.MINT)
     assert not has_permission([Role.VIEWER], Permission.CREATE_USER)
 
