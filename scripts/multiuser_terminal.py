@@ -191,6 +191,12 @@ ADMIN_MENU = [
         ("33", "list-user-permissions", "Ver permisos de un usuario"),
         ("34", "reset-role-permissions", "Resetear permisos de un rol"),
     ]),
+    ("MODERACION", [
+        ("35", "freeze-wallet", "Congelar wallet"),
+        ("36", "unfreeze-wallet", "Descongelar wallet"),
+        ("37", "ban-user", "Banear usuario"),
+        ("38", "unban-user", "Desbanear usuario"),
+    ]),
     ("SISTEMA", [
         ("22", "generate-admin-token", "Generar token de invitacion ADMIN"),
         ("11", "dashboard", "Metricas de sesion y rendimiento"),
@@ -830,6 +836,15 @@ def _auth_flow(store_file) -> SessionState:
             print(_box_bot())
             return session
 
+        if "suspendida" in str(result).lower():
+            print()
+            print(_box_top())
+            print(_box_line(_red("  CUENTA SUSPENDIDA")))
+            print(_box_mid())
+            print(_box_line(f"  {_dim('Tu cuenta ha sido suspendida por un administrador.')}"))
+            print(_box_line(f"  {_dim('Contacta a soporte tecnico o servicio al cliente.')}"))
+            print(_box_bot())
+            raise SystemExit(1)
         _print_result_box("ERROR", "login", str(result))
         if attempt < 2:
             print(_dim(f"  Intentos restantes: {2 - attempt}"))
@@ -1625,6 +1640,76 @@ def _cmd_reset_role_permissions(ctx: CommandContext) -> None:
     _execute_and_track(ctx, action="reset-role-permissions", result=result, revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units)
 
 
+# ── Moderation handlers ──────────────────────────────────
+
+def _cmd_freeze_wallet(ctx: CommandContext) -> None:
+    _section_header("CONGELAR WALLET")
+    wallet_id = _prompt("wallet_id")
+    input_units = _measure_units(wallet_id)
+    started_at = time.perf_counter()
+    result = ctx.ledger.freeze_wallet(wallet_id)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    if isinstance(result, str) and result.startswith("Error"):
+        _print_result_box("ERROR", "freeze-wallet", result)
+        _execute_and_track(ctx, action="freeze-wallet", result=result, revision_id=None, is_error=True, elapsed_ms=elapsed_ms, input_units=input_units)
+        raise _SkipCommand
+    rev = _persist(ctx.store, ctx.ledger)
+    _print_data_box("Wallet congelada", result if isinstance(result, dict) else {"resultado": result}, rev)
+    _execute_and_track(ctx, action="freeze-wallet", result=result, revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units)
+
+
+def _cmd_unfreeze_wallet(ctx: CommandContext) -> None:
+    _section_header("DESCONGELAR WALLET")
+    wallet_id = _prompt("wallet_id")
+    input_units = _measure_units(wallet_id)
+    started_at = time.perf_counter()
+    result = ctx.ledger.unfreeze_wallet(wallet_id)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    if isinstance(result, str) and result.startswith("Error"):
+        _print_result_box("ERROR", "unfreeze-wallet", result)
+        _execute_and_track(ctx, action="unfreeze-wallet", result=result, revision_id=None, is_error=True, elapsed_ms=elapsed_ms, input_units=input_units)
+        raise _SkipCommand
+    rev = _persist(ctx.store, ctx.ledger)
+    _print_data_box("Wallet descongelada", result if isinstance(result, dict) else {"resultado": result}, rev)
+    _execute_and_track(ctx, action="unfreeze-wallet", result=result, revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units)
+
+
+def _cmd_ban_user(ctx: CommandContext) -> None:
+    _section_header("BANEAR USUARIO")
+    user_id = _prompt("user_id")
+    if not _prompt_confirm(f"Banear usuario {user_id} y congelar todas sus wallets?"):
+        _print_result_box("SUCCESS", "ban-user", "Cancelado por el usuario.")
+        raise _SkipCommand
+    input_units = _measure_units(user_id)
+    started_at = time.perf_counter()
+    result = ctx.ledger.ban_user(user_id)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    if isinstance(result, str) and result.startswith("Error"):
+        _print_result_box("ERROR", "ban-user", result)
+        _execute_and_track(ctx, action="ban-user", result=result, revision_id=None, is_error=True, elapsed_ms=elapsed_ms, input_units=input_units)
+        raise _SkipCommand
+    rev = _persist(ctx.store, ctx.ledger)
+    _print_data_box("Usuario baneado", result if isinstance(result, dict) else {"resultado": result}, rev)
+    _execute_and_track(ctx, action="ban-user", result=result, revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units)
+
+
+def _cmd_unban_user(ctx: CommandContext) -> None:
+    _section_header("DESBANEAR USUARIO")
+    user_id = _prompt("user_id")
+    unfreeze = _prompt_confirm("Desbanear Y descongelar todas las wallets del usuario?")
+    input_units = _measure_units(user_id)
+    started_at = time.perf_counter()
+    result = ctx.ledger.unban_user(user_id, unfreeze_wallets=unfreeze)
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    if isinstance(result, str) and result.startswith("Error"):
+        _print_result_box("ERROR", "unban-user", result)
+        _execute_and_track(ctx, action="unban-user", result=result, revision_id=None, is_error=True, elapsed_ms=elapsed_ms, input_units=input_units)
+        raise _SkipCommand
+    rev = _persist(ctx.store, ctx.ledger)
+    _print_data_box("Usuario desbaneado", result if isinstance(result, dict) else {"resultado": result}, rev)
+    _execute_and_track(ctx, action="unban-user", result=result, revision_id=rev, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units)
+
+
 # ── Command handler registry ────────────────────────────
 
 from typing import Callable
@@ -1665,6 +1750,10 @@ COMMAND_HANDLERS: dict[str, tuple[Callable, str | None]] = {
     "32": (_cmd_list_role_permissions,   Permission.MANAGE_PERMISSIONS),
     "33": (_cmd_list_user_permissions,   Permission.MANAGE_PERMISSIONS),
     "34": (_cmd_reset_role_permissions,  Permission.MANAGE_PERMISSIONS),
+    "35": (_cmd_freeze_wallet,           Permission.FREEZE_WALLET),
+    "36": (_cmd_unfreeze_wallet,         Permission.UNFREEZE_WALLET),
+    "37": (_cmd_ban_user,                Permission.BAN_USER),
+    "38": (_cmd_unban_user,              Permission.UNBAN_USER),
 }
 
 
