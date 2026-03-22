@@ -213,16 +213,22 @@ def main() -> None:
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    cmd_register = subparsers.add_parser("register", help="Register a new user (first user becomes ADMIN)")
+    cmd_register = subparsers.add_parser("register", help="Register a new user with role selection")
     _add_json_flag(cmd_register)
     cmd_register.add_argument("--user-id", required=True)
     cmd_register.add_argument("--display-name", required=True)
     cmd_register.add_argument("--password", required=True)
+    cmd_register.add_argument("--role", default="", choices=["ADMIN", "OPERATOR", "VIEWER", "admin", "operator", "viewer", ""])
+    cmd_register.add_argument("--invitation-token", default="")
 
     cmd_login = subparsers.add_parser("login", help="Authenticate and obtain a JWT token")
     _add_json_flag(cmd_login)
     cmd_login.add_argument("--user-id", required=True)
     cmd_login.add_argument("--password", required=True)
+    cmd_login.add_argument("--activation-code", default="")
+
+    cmd_gen_admin = subparsers.add_parser("generate-admin-token", help="Generate an invitation token for new ADMIN (ADMIN only)")
+    _add_json_flag(cmd_gen_admin)
 
     cmd_assign_role = subparsers.add_parser("assign-role", help="Assign a role to a user (ADMIN only)")
     _add_json_flag(cmd_assign_role)
@@ -362,16 +368,27 @@ def main() -> None:
         # ── Auth commands (no token required) ──
         if args.command == "register":
             is_bootstrap = ledger.is_empty()
-            result = ledger.create_user(args.user_id, args.display_name, password=args.password)
-            if is_bootstrap and not (isinstance(result, str) and result.startswith("Error")):
-                ledger.assign_role(args.user_id, "ADMIN")
-                result = {"message": result, "bootstrap": True, "role": "ADMIN", "user_id": args.user_id}
+            role = (args.role or "").upper()
+            if is_bootstrap:
+                result = ledger.create_user(args.user_id, args.display_name, password=args.password)
+                if not (isinstance(result, str) and result.startswith("Error")):
+                    ledger.assign_role(args.user_id, "ADMIN")
+                    result = {"message": result if isinstance(result, str) else result.get("message", ""), "bootstrap": True, "role": "ADMIN", "user_id": args.user_id}
+            else:
+                result = ledger.create_user(args.user_id, args.display_name, password=args.password, role=role, invitation_token=args.invitation_token)
             mutate = True
         elif args.command == "login":
             if not settings.jwt_secret:
                 result = "Error: JWT_SECRET no configurado en el entorno."
             else:
-                result = ledger.login(args.user_id, args.password, settings.jwt_secret, settings.jwt_ttl_seconds)
+                result = ledger.login(args.user_id, args.password, settings.jwt_secret, settings.jwt_ttl_seconds, activation_code=args.activation_code)
+                if isinstance(result, dict):
+                    mutate = True
+        elif args.command == "generate-admin-token":
+            payload = _require_auth(Permission.ASSIGN_ROLE)
+            caller_id = payload.get("sub", "")
+            result = ledger.generate_admin_invitation(caller_id)
+            mutate = True
 
         # ── Admin-only commands ──
         elif args.command == "create-user":
