@@ -117,6 +117,7 @@ ADMIN_MENU = [
     ("CONSULTAS", [
         ("5", "list-wallets", "Listar wallets registradas"),
         ("6", "list-utxos", "Listar UTXOs de una wallet"),
+        ("46", "list-transfers", "Listar transferencias"),
         ("7", "verify-integrity", "Verificar integridad nonce + hash-chain"),
         ("8", "snapshot", "Exportar estado completo del ledger"),
         ("21", "list-revisions", "Historial de revisiones del ledger"),
@@ -185,6 +186,7 @@ _SHARED_EXCHANGE = ("EXCHANGE", [
 _SHARED_CONSULTAS = ("CONSULTAS", [
     ("5", "list-wallets", "Listar mis wallets"),
     ("6", "list-utxos", "Listar mis UTXOs"),
+    ("46", "list-transfers", "Listar mis transferencias"),
     ("7", "verify-integrity", "Verificar integridad"),
 ])
 
@@ -990,6 +992,94 @@ def _cmd_snapshot(ctx: CommandContext) -> None:
     _print_data_box("Estado del Ledger", summary)
     _execute_and_track(
         ctx, action="snapshot", result=result,
+        revision_id=None, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
+    )
+
+
+def _cmd_list_transfers(ctx: CommandContext) -> None:
+    _section_header("LISTAR TRANSFERENCIAS")
+    is_admin = "ADMIN" in ctx.session.auth_roles
+
+    print()
+    print(_box_top())
+    print(_box_line(_cyan("  Filtros de busqueda")))
+    print(_box_mid())
+    print(_box_line(f"  {_yellow('[1]')} Por ID de transferencia"))
+    print(_box_line(f"  {_yellow('[2]')} Mas recientes (limit)"))
+    if is_admin:
+        print(_box_line(f"  {_yellow('[3]')} Por wallet"))
+        print(_box_line(f"  {_yellow('[4]')} Por usuario"))
+    else:
+        print(_box_line(f"  {_yellow('[3]')} Por mi wallet"))
+    print(_box_bot())
+
+    filter_choice = _prompt("Filtro", hint="1/2/3/4")
+
+    transfer_id = ""
+    wallet_id = ""
+    user_id = ""
+    limit = 50
+
+    if filter_choice == "1":
+        transfer_id = _prompt("transfer_id")
+        if not transfer_id:
+            _print_result_box("ERROR", "list-transfers", "transfer_id es requerido.")
+            raise _SkipCommand
+    elif filter_choice == "2":
+        limit_raw = _prompt("limit", default="20")
+        parsed_limit, limit_err = _parse_optional_int(limit_raw, "limit")
+        if limit_err:
+            _print_result_box("ERROR", "list-transfers", limit_err)
+            raise _SkipCommand
+        limit = parsed_limit or 20
+    elif filter_choice == "3":
+        if is_admin:
+            wallet_id = _prompt("wallet_id")
+        else:
+            my_wallets = ctx.ledger.list_wallets(user_id=ctx.session.auth_user_id)
+            if not my_wallets:
+                _print_result_box("ERROR", "list-transfers", "No tienes wallets creadas.")
+                raise _SkipCommand
+            if len(my_wallets) == 1:
+                wallet_id = my_wallets[0]["wallet_id"]
+            else:
+                print()
+                print(_box_top())
+                print(_box_line(_cyan("  Tus wallets:")))
+                print(_box_mid())
+                for i, w in enumerate(my_wallets, 1):
+                    print(_box_line(f"  {_yellow(f'[{i}]')} {w['wallet_id']}  {_dim(w['model'])}"))
+                print(_box_bot())
+                sel = _prompt("Selecciona", hint=f"1-{len(my_wallets)}")
+                try:
+                    wallet_id = my_wallets[int(sel) - 1]["wallet_id"]
+                except (ValueError, IndexError):
+                    _print_result_box("ERROR", "list-transfers", "Seleccion invalida.")
+                    raise _SkipCommand
+    elif filter_choice == "4" and is_admin:
+        user_id = _prompt("user_id")
+    else:
+        _print_result_box("ERROR", "list-transfers", f"Filtro '{filter_choice}' no reconocido.")
+        raise _SkipCommand
+
+    if not is_admin and not transfer_id and not wallet_id:
+        user_id = ctx.session.auth_user_id
+
+    input_units = _measure_units(transfer_id, wallet_id, user_id, limit)
+    started_at = time.perf_counter()
+    result = ctx.ledger.list_transfers(
+        limit=limit,
+        wallet_id=wallet_id,
+        user_id=user_id,
+        transfer_id=transfer_id,
+    )
+    elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+    if not result:
+        _print_result_box("ERROR", "list-transfers", "No se encontraron transferencias con esos filtros.")
+    else:
+        _print_data_box(f"Transferencias ({len(result)} encontradas)", result)
+    _execute_and_track(
+        ctx, action="list-transfers", result=result,
         revision_id=None, is_error=False, elapsed_ms=elapsed_ms, input_units=input_units,
     )
 
@@ -1886,6 +1976,7 @@ COMMAND_HANDLERS: dict[str, tuple[Callable, str | None]] = {
     "43": (_cmd_list_audit_log,          Permission.VIEW_AUDIT_LOG),
     "44": (_cmd_change_password,         None),
     "45": (_cmd_update_profile,          Permission.UPDATE_PROFILE),
+    "46": (_cmd_list_transfers,          Permission.VIEW_TRANSFERS),
 }
 
 
