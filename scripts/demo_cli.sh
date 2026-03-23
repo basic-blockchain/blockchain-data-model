@@ -4,8 +4,14 @@
 # Covers: users, wallets, mint, transfer, exchange, treasury, policies, risk,
 #         permissions, freeze, ban, soft delete, temp password, audit log.
 # Usage: bash scripts/demo_cli.sh
+#
+# Backend: siempre JSON (ignora PERSISTENCE_BACKEND=postgres del .env).
+# Los datos se escriben en data/multiuser/wallet-ledger.json.
 # =============================================================================
 set -e
+
+# Forzar backend JSON aunque .env tenga PERSISTENCE_BACKEND=postgres
+export PERSISTENCE_BACKEND=json
 
 STORE="data/multiuser/wallet-ledger.json"
 CLI="py scripts/multiuser_wallet_cli.py --store-file $STORE"
