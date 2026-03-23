@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_DOWN
 
-UNIT = Decimal("0.00000001")
+from domain.precision import UNIT
 
 
 @dataclass

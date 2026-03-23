@@ -9,14 +9,16 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_DOWN
 
-UNIT = Decimal("0.00000001")
+from domain.precision import UNIT, normalize_amount  # re-exported for terminal
+from domain.utxo_operations import (
+    select_utxos as _select_utxos,
+    sum_utxos as _sum_utxos,
+    consumed_utxo_ids as _consumed_utxo_ids,
+    remove_consumed_utxos as _remove_consumed_utxos,
+)
+
 TOKEN_ALPHABET = string.ascii_letters + string.digits
 TREASURY_USER_ID = "__TREASURY__"
-
-
-def normalize_amount(value: Decimal | int | float | str) -> Decimal:
-    normalized = Decimal(str(value)).quantize(UNIT, rounding=ROUND_DOWN)
-    return Decimal(format(normalized, "f")).quantize(UNIT, rounding=ROUND_DOWN)
 
 
 @dataclass
@@ -680,12 +682,7 @@ class MultiUserWalletLedger:
         return sha256(payload.encode("utf-8")).hexdigest()
 
     def _sum_wallet_utxos(self, wallet_id: str, currency: str) -> Decimal:
-        total = Decimal("0")
-        for utxo in self.utxos.get(wallet_id, []):
-            if str(utxo.get("currency", "")) != currency:
-                continue
-            total += normalize_amount(utxo.get("amount", "0"))
-        return total
+        return _sum_utxos(self.utxos.get(wallet_id, []), currency)
 
     def _sync_wallet_balance(self, wallet_id: str) -> None:
         wallet = self.wallets.get(wallet_id)
@@ -933,23 +930,15 @@ class MultiUserWalletLedger:
             treasury.balance -= top_amount
             target.balance += credit_amount
         else:
-            selected: list[dict] = []
-            selected_total = Decimal("0")
-            for utxo in self.utxos.get(treasury_wallet_id, []):
-                if str(utxo.get("currency", "")) != treasury.currency:
-                    continue
-                selected.append(utxo)
-                selected_total += normalize_amount(utxo.get("amount", "0"))
-                if selected_total >= top_amount:
-                    break
+            selected, selected_total = _select_utxos(
+                self.utxos.get(treasury_wallet_id, []), treasury.currency, top_amount,
+            )
             if selected_total < top_amount:
                 available = self._sum_wallet_utxos(treasury_wallet_id, treasury.currency)
                 return f"Error: fondos insuficientes en tesoreria. Disponible={available}, Requerido={top_amount}."
-            consumed_ids = {str(item.get("utxo_id", "")) for item in selected}
-            self.utxos[treasury_wallet_id] = [
-                utxo for utxo in self.utxos.get(treasury_wallet_id, [])
-                if str(utxo.get("utxo_id", "")) not in consumed_ids
-            ]
+            self.utxos[treasury_wallet_id] = _remove_consumed_utxos(
+                self.utxos.get(treasury_wallet_id, []), _consumed_utxo_ids(selected),
+            )
             self.utxos.setdefault(target_wallet_id, []).append({
                 "utxo_id": self._build_utxo_id(),
                 "wallet_id": target_wallet_id,
@@ -1419,15 +1408,9 @@ class MultiUserWalletLedger:
             sender.balance -= total_cost
             receiver.balance += credit_amount
         else:
-            selected: list[dict] = []
-            selected_total = Decimal("0")
-            for utxo in self.utxos.get(sender_wallet, []):
-                if str(utxo.get("currency", "")) != sender.currency:
-                    continue
-                selected.append(utxo)
-                selected_total += normalize_amount(utxo.get("amount", "0"))
-                if selected_total >= total_cost:
-                    break
+            selected, selected_total = _select_utxos(
+                self.utxos.get(sender_wallet, []), sender.currency, total_cost,
+            )
 
             if selected_total < total_cost:
                 available = self._sum_wallet_utxos(sender_wallet, sender.currency)
@@ -1436,12 +1419,9 @@ class MultiUserWalletLedger:
                     f"Requerido={total_cost}."
                 )
 
-            consumed_ids = {str(item.get("utxo_id", "")) for item in selected}
-            self.utxos[sender_wallet] = [
-                utxo
-                for utxo in self.utxos.get(sender_wallet, [])
-                if str(utxo.get("utxo_id", "")) not in consumed_ids
-            ]
+            self.utxos[sender_wallet] = _remove_consumed_utxos(
+                self.utxos.get(sender_wallet, []), _consumed_utxo_ids(selected),
+            )
 
             self.utxos.setdefault(receiver_wallet, []).append(
                 {
