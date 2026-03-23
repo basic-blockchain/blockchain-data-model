@@ -161,58 +161,53 @@ ADMIN_MENU = [
     ]),
 ]
 
-OPERATOR_MENU = [
-    ("WALLETS", [
-        ("2", "create-wallet", "Crear wallet UTXO o ACCOUNT"),
-        ("9", "refresh-token", "Renovar token de wallet"),
-        ("13", "balance", "Consultar balance"),
-    ]),
-    ("TRANSACCIONES", [
-        ("3", "mint", "Emitir tokens"),
-        ("4", "transfer", "Transferir fondos"),
-        ("10", "transfer-wizard", "Asistente de transferencia"),
-    ]),
-    ("EXCHANGE", [
-        ("24", "list-exchange-rates", "Ver tasas de conversion"),
-    ]),
-    ("CONSULTAS", [
-        ("5", "list-wallets", "Listar mis wallets"),
-        ("6", "list-utxos", "Listar mis UTXOs"),
-        ("7", "verify-integrity", "Verificar integridad"),
-    ]),
-    ("SISTEMA", [
-        ("44", "change-password", "Cambiar mi contrasena"),
-        ("45", "update-profile", "Actualizar mi perfil"),
-        ("11", "dashboard", "Metricas de sesion"),
-        ("0", "exit", "Salir"),
-    ]),
-]
+_SHARED_WALLETS = ("WALLETS", [
+    ("2", "create-wallet", "Crear wallet UTXO o ACCOUNT"),
+    ("9", "refresh-token", "Renovar token de wallet"),
+    ("13", "balance", "Consultar balance"),
+])
 
-VIEWER_MENU = [
-    ("WALLETS", [
-        ("2", "create-wallet", "Crear wallet UTXO o ACCOUNT"),
-        ("9", "refresh-token", "Renovar token de wallet"),
-        ("13", "balance", "Consultar balance"),
-    ]),
-    ("TRANSACCIONES", [
-        ("4", "transfer", "Transferir fondos"),
-        ("10", "transfer-wizard", "Asistente de transferencia"),
-    ]),
-    ("EXCHANGE", [
-        ("24", "list-exchange-rates", "Ver tasas de conversion"),
-    ]),
-    ("CONSULTAS", [
-        ("5", "list-wallets", "Listar mis wallets"),
-        ("6", "list-utxos", "Listar mis UTXOs"),
-        ("7", "verify-integrity", "Verificar integridad"),
-    ]),
-    ("SISTEMA", [
-        ("44", "change-password", "Cambiar mi contrasena"),
-        ("45", "update-profile", "Actualizar mi perfil"),
-        ("11", "dashboard", "Metricas de sesion"),
-        ("0", "exit", "Salir"),
-    ]),
-]
+_VIEWER_TRANSACCIONES = ("TRANSACCIONES", [
+    ("4", "transfer", "Transferir fondos"),
+    ("10", "transfer-wizard", "Asistente de transferencia"),
+])
+
+_OPERATOR_TRANSACCIONES = ("TRANSACCIONES", [
+    ("3", "mint", "Emitir tokens"),
+    ("4", "transfer", "Transferir fondos"),
+    ("10", "transfer-wizard", "Asistente de transferencia"),
+])
+
+_SHARED_EXCHANGE = ("EXCHANGE", [
+    ("24", "list-exchange-rates", "Ver tasas de conversion"),
+])
+
+_SHARED_CONSULTAS = ("CONSULTAS", [
+    ("5", "list-wallets", "Listar mis wallets"),
+    ("6", "list-utxos", "Listar mis UTXOs"),
+    ("7", "verify-integrity", "Verificar integridad"),
+])
+
+_SHARED_SISTEMA = ("SISTEMA", [
+    ("44", "change-password", "Cambiar mi contrasena"),
+    ("45", "update-profile", "Actualizar mi perfil"),
+    ("11", "dashboard", "Metricas de sesion"),
+    ("0", "exit", "Salir"),
+])
+
+
+def _build_user_menu(transacciones_section: tuple) -> list:
+    return [
+        _SHARED_WALLETS,
+        transacciones_section,
+        _SHARED_EXCHANGE,
+        _SHARED_CONSULTAS,
+        _SHARED_SISTEMA,
+    ]
+
+
+OPERATOR_MENU = _build_user_menu(_OPERATOR_TRANSACCIONES)
+VIEWER_MENU = _build_user_menu(_VIEWER_TRANSACCIONES)
 
 MENU_SECTIONS = ADMIN_MENU  # default fallback
 
