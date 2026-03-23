@@ -343,6 +343,14 @@ def main() -> None:
     cmd_list_alerts.add_argument("--severity", default="")
     cmd_list_alerts.add_argument("--limit", type=int, default=50)
 
+    cmd_list_transfers = subparsers.add_parser("list-transfers", help="List transfers (filterable by wallet, user, type, or ID)")
+    _add_json_flag(cmd_list_transfers)
+    cmd_list_transfers.add_argument("--wallet-id", default="")
+    cmd_list_transfers.add_argument("--user-id", default="")
+    cmd_list_transfers.add_argument("--type", default="", dest="transfer_type")
+    cmd_list_transfers.add_argument("--transfer-id", default="")
+    cmd_list_transfers.add_argument("--limit", type=int, default=50)
+
     cmd_set_exchange_rate = subparsers.add_parser("set-exchange-rate", help="Set exchange rate between two currencies (ADMIN only)")
     _add_json_flag(cmd_set_exchange_rate)
     cmd_set_exchange_rate.add_argument("--from-currency", required=True)
@@ -691,6 +699,15 @@ def main() -> None:
         elif args.command == "list-alerts":
             _require_auth(Permission.VIEW_ALERTS)
             result = ledger.list_alerts(limit=args.limit, user_id=args.user_id, severity=args.severity)
+        elif args.command == "list-transfers":
+            _require_auth(Permission.VIEW_TRANSFERS)
+            result = ledger.list_transfers(
+                limit=args.limit,
+                wallet_id=args.wallet_id,
+                user_id=args.user_id,
+                transfer_type=args.transfer_type,
+                transfer_id=args.transfer_id,
+            )
         elif args.command == "verify-integrity":
             _require_auth(Permission.VIEW_WALLETS)
             result = ledger.verify_transfer_integrity()

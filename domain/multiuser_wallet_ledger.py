@@ -621,6 +621,41 @@ class MultiUserWalletLedger:
             selected = selected[-limit:]
         return list(reversed(selected))
 
+    def list_transfers(
+        self,
+        *,
+        limit: int = 50,
+        wallet_id: str = "",
+        user_id: str = "",
+        transfer_type: str = "",
+        transfer_id: str = "",
+    ) -> list[dict]:
+        if transfer_id:
+            return [t for t in self.transfers if t.get("transfer_id") == transfer_id]
+
+        selected = self.transfers
+
+        if wallet_id:
+            selected = [
+                t for t in selected
+                if t.get("sender_wallet") == wallet_id or t.get("receiver_wallet") == wallet_id
+            ]
+
+        if user_id:
+            wallet_ids = set(self.user_wallets.get(user_id, []))
+            selected = [
+                t for t in selected
+                if t.get("sender_wallet") in wallet_ids or t.get("receiver_wallet") in wallet_ids
+            ]
+
+        if transfer_type:
+            normalized = transfer_type.strip().upper()
+            selected = [t for t in selected if t.get("type", "").upper() == normalized]
+
+        if limit > 0:
+            selected = selected[-limit:]
+        return list(reversed(selected))
+
     def _register_alert(
         self,
         user_id: str,
