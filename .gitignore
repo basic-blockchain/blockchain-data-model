@@ -10,3 +10,5 @@ data/multiuser/*.json
 .claude/
 CLAUDE.md
 AGENTS.md
+PRESENTATION_GUIDE.md
+UNIFIED_PRESENTATION.md
