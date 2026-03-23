@@ -4,18 +4,13 @@ import secrets
 import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
-from decimal import Decimal, ROUND_DOWN, getcontext
+from decimal import Decimal, getcontext
 
 from domain.compliance import DEFAULT_COMPLIANCE_PROFILES, evaluate_compliance, resolve_profile
+from domain.precision import SATOSHI, normalize_amount  # noqa: F401 — SATOSHI re-exported
 from domain.traceability_models import CertificateRecord, LogisticsEvent, TraceabilityLot
 
 getcontext().prec = 28
-SATOSHI = Decimal("0.00000001")
-
-
-def normalize_amount(value):
-    normalized = Decimal(str(value)).quantize(SATOSHI, rounding=ROUND_DOWN)
-    return Decimal(format(normalized, "f")).quantize(SATOSHI, rounding=ROUND_DOWN)
 
 
 @dataclass

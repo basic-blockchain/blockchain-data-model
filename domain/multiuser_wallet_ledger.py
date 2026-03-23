@@ -9,14 +9,10 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_DOWN
 
-UNIT = Decimal("0.00000001")
+from domain.precision import UNIT, normalize_amount  # re-exported for terminal
+
 TOKEN_ALPHABET = string.ascii_letters + string.digits
 TREASURY_USER_ID = "__TREASURY__"
-
-
-def normalize_amount(value: Decimal | int | float | str) -> Decimal:
-    normalized = Decimal(str(value)).quantize(UNIT, rounding=ROUND_DOWN)
-    return Decimal(format(normalized, "f")).quantize(UNIT, rounding=ROUND_DOWN)
 
 
 @dataclass
