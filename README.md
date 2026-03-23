@@ -2,13 +2,13 @@
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![PostgreSQL 16](https://img.shields.io/badge/PostgreSQL-16-336791?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
-[![SemVer](https://img.shields.io/badge/semver-2.8.1-3D7EA6)](https://semver.org/)
+[![SemVer](https://img.shields.io/badge/semver-2.8.2-3D7EA6)](https://semver.org/)
 [![Docs](https://img.shields.io/badge/docs-available-1F6FEB)](docs/MODEL_SIMULATION_GUIDE.md)
 
 Simulacion realista de dos modelos blockchain (UTXO y Account-based) con gestion multiusuario de wallets, trazabilidad de cadena de suministro, compliance, autenticacion (bcrypt + JWT), control de acceso basado en roles (RBAC), intercambio de divisas, tesoreria corporativa, auditoria completa y gestion avanzada de usuarios.
 
 Current release line:
-- Latest stable release: `v2.8.1`
+- Latest stable release: `v2.8.2`
 - Next target: `v2.9.0`
 
 ---
