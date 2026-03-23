@@ -23,7 +23,7 @@ Current release line:
 ### 1. Clonar e instalar dependencias
 
 ```bash
-cd /c/Users/User/Documents/sapir/blockchain_usb/scripts/python/blockchain-data-model
+cd ruta_del_proyecto/blockchain-data-model
 py -m pip install -r requirements.txt
 ```
 
