@@ -660,6 +660,115 @@ def test_cli_verify_integrity_reports_valid_chain(tmp_path):
     assert payload["result"]["valid"] is True
 
 
+def test_cli_list_transfers_scoped_prevents_non_admin_user_id_override(tmp_path):
+    repo_root = Path(__file__).resolve().parents[1]
+    store_file = tmp_path / "wallet-ledger.json"
+    admin_token = _bootstrap_admin(str(store_file), repo_root)
+
+    for user_id in ("alice", "bob", "caro"):
+        assert _run_cli(
+            [
+                "--store-file", str(store_file),
+                "--token", admin_token,
+                "create-user",
+                "--user-id", user_id,
+                "--display-name", user_id.title(),
+                "--password", "pass123",
+            ],
+            cwd=repo_root,
+        ).returncode == 0
+
+    assert _run_cli(
+        ["--store-file", str(store_file), "--token", admin_token, "assign-role", "--user-id", "alice", "--role", "VIEWER"],
+        cwd=repo_root,
+    ).returncode == 0
+    assert _run_cli(
+        ["--store-file", str(store_file), "--token", admin_token, "assign-role", "--user-id", "bob", "--role", "OPERATOR"],
+        cwd=repo_root,
+    ).returncode == 0
+
+    bob_wallet = _run_cli(
+        [
+            "--store-file", str(store_file),
+            "--token", admin_token,
+            "create-wallet",
+            "--user-id", "bob",
+            "--wallet-id", "wallet_user_bravo_utxo_02",
+            "--json",
+        ],
+        cwd=repo_root,
+    )
+    assert bob_wallet.returncode == 0
+    bob_sender_token = json.loads(bob_wallet.stdout)["result"]["auth_token"]
+
+    assert _run_cli(
+        [
+            "--store-file", str(store_file),
+            "--token", admin_token,
+            "create-wallet",
+            "--user-id", "caro",
+            "--wallet-id", "wallet_user_carlo_utxo_03",
+            "--json",
+        ],
+        cwd=repo_root,
+    ).returncode == 0
+
+    assert _run_cli(
+        ["--store-file", str(store_file), "--token", admin_token, "mint", "--wallet-id", "wallet_user_bravo_utxo_02", "--amount", "10"],
+        cwd=repo_root,
+    ).returncode == 0
+    assert _run_cli(
+        [
+            "--store-file", str(store_file),
+            "--token", admin_token,
+            "transfer",
+            "--from-wallet", "wallet_user_bravo_utxo_02",
+            "--to-wallet", "wallet_user_carlo_utxo_03",
+            "--amount", "2",
+            "--sender-token", bob_sender_token,
+            "--json",
+        ],
+        cwd=repo_root,
+    ).returncode == 0
+
+    alice_login = _run_cli(
+        ["--store-file", str(store_file), "login", "--user-id", "alice", "--password", "pass123", "--json"],
+        cwd=repo_root,
+    )
+    assert alice_login.returncode == 0
+    alice_token = json.loads(alice_login.stdout)["result"]["access_token"]
+
+    alice_view = _run_cli(
+        [
+            "--store-file", str(store_file),
+            "--token", alice_token,
+            "list-transfers",
+            "--user-id", "bob",
+            "--json",
+        ],
+        cwd=repo_root,
+    )
+    assert alice_view.returncode == 0
+    alice_payload = json.loads(alice_view.stdout)
+    assert alice_payload["success"] is True
+    assert alice_payload["result"] == []
+
+    admin_view = _run_cli(
+        [
+            "--store-file", str(store_file),
+            "--token", admin_token,
+            "list-transfers",
+            "--user-id", "bob",
+            "--json",
+        ],
+        cwd=repo_root,
+    )
+    assert admin_view.returncode == 0
+    admin_payload = json.loads(admin_view.stdout)
+    assert admin_payload["success"] is True
+    assert len(admin_payload["result"]) >= 1
+
+
 def test_cli_utxo_model_transfer_and_list_utxos(tmp_path):
     repo_root = Path(__file__).resolve().parents[1]
     store_file = tmp_path / "wallet-ledger.json"

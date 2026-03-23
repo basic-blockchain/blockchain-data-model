@@ -66,6 +66,22 @@ class UserRiskProfileRecord:
     updated_at: str
 
 
+@dataclass(frozen=True)
+class TransferListQuery:
+    limit: int = 50
+    wallet_id: str = ""
+    user_id: str = ""
+    transfer_type: str = ""
+    transfer_id: str = ""
+
+
+@dataclass(frozen=True)
+class TransferAccessScope:
+    can_view_all: bool
+    allowed_wallet_ids: set[str] | None = None
+    forced_user_id: str = ""
+
+
 class MultiUserWalletLedger:
     TOKEN_TTL_SECONDS = 300  # 5 minutes for wallet transfer tokens
 
@@ -621,6 +637,54 @@ class MultiUserWalletLedger:
             selected = selected[-limit:]
         return list(reversed(selected))
 
+    def build_transfer_access_scope(self, actor_user_id: str, actor_roles: list[str]) -> TransferAccessScope:
+        if "ADMIN" in actor_roles:
+            return TransferAccessScope(can_view_all=True)
+
+        return TransferAccessScope(
+            can_view_all=False,
+            allowed_wallet_ids=set(self.user_wallets.get(actor_user_id, [])),
+            forced_user_id=actor_user_id,
+        )
+
+    def list_transfers_scoped(self, query: TransferListQuery, scope: TransferAccessScope) -> list[dict]:
+        selected = self.transfers
+
+        if query.transfer_id:
+            selected = [t for t in selected if t.get("transfer_id") == query.transfer_id]
+        else:
+            if query.wallet_id:
+                selected = [
+                    t for t in selected
+                    if t.get("sender_wallet") == query.wallet_id or t.get("receiver_wallet") == query.wallet_id
+                ]
+
+            effective_user_id = query.user_id
+            if not scope.can_view_all:
+                effective_user_id = scope.forced_user_id
+
+            if effective_user_id:
+                wallet_ids = set(self.user_wallets.get(effective_user_id, []))
+                selected = [
+                    t for t in selected
+                    if t.get("sender_wallet") in wallet_ids or t.get("receiver_wallet") in wallet_ids
+                ]
+
+            if query.transfer_type:
+                normalized = query.transfer_type.strip().upper()
+                selected = [t for t in selected if t.get("type", "").upper() == normalized]
+
+        if not scope.can_view_all and scope.allowed_wallet_ids is not None:
+            selected = [
+                t for t in selected
+                if t.get("sender_wallet") in scope.allowed_wallet_ids
+                or t.get("receiver_wallet") in scope.allowed_wallet_ids
+            ]
+
+        if query.limit > 0:
+            selected = selected[-query.limit:]
+        return list(reversed(selected))
+
     def list_transfers(
         self,
         *,
@@ -630,31 +694,14 @@ class MultiUserWalletLedger:
         transfer_type: str = "",
         transfer_id: str = "",
     ) -> list[dict]:
-        if transfer_id:
-            return [t for t in self.transfers if t.get("transfer_id") == transfer_id]
-
-        selected = self.transfers
-
-        if wallet_id:
-            selected = [
-                t for t in selected
-                if t.get("sender_wallet") == wallet_id or t.get("receiver_wallet") == wallet_id
-            ]
-
-        if user_id:
-            wallet_ids = set(self.user_wallets.get(user_id, []))
-            selected = [
-                t for t in selected
-                if t.get("sender_wallet") in wallet_ids or t.get("receiver_wallet") in wallet_ids
-            ]
-
-        if transfer_type:
-            normalized = transfer_type.strip().upper()
-            selected = [t for t in selected if t.get("type", "").upper() == normalized]
-
-        if limit > 0:
-            selected = selected[-limit:]
-        return list(reversed(selected))
+        query = TransferListQuery(
+            limit=limit,
+            wallet_id=wallet_id,
+            user_id=user_id,
+            transfer_type=transfer_type,
+            transfer_id=transfer_id,
+        )
+        return self.list_transfers_scoped(query, TransferAccessScope(can_view_all=True))
 
     def _register_alert(
         self,
