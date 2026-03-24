@@ -997,6 +997,8 @@ def _cmd_snapshot(ctx: CommandContext) -> None:
 
 
 def _cmd_list_transfers(ctx: CommandContext) -> None:
+    from domain.multiuser_wallet_ledger import TransferListQuery
+
     _section_header("LISTAR TRANSFERENCIAS")
     is_admin = "ADMIN" in ctx.session.auth_roles
 
@@ -1062,17 +1064,20 @@ def _cmd_list_transfers(ctx: CommandContext) -> None:
         _print_result_box("ERROR", "list-transfers", f"Filtro '{filter_choice}' no reconocido.")
         raise _SkipCommand
 
-    if not is_admin and not transfer_id and not wallet_id:
-        user_id = ctx.session.auth_user_id
-
-    input_units = _measure_units(transfer_id, wallet_id, user_id, limit)
-    started_at = time.perf_counter()
-    result = ctx.ledger.list_transfers(
+    scope = ctx.ledger.build_transfer_access_scope(
+        actor_user_id=ctx.session.auth_user_id,
+        actor_roles=ctx.session.auth_roles,
+    )
+    query = TransferListQuery(
         limit=limit,
         wallet_id=wallet_id,
         user_id=user_id,
         transfer_id=transfer_id,
     )
+
+    input_units = _measure_units(transfer_id, wallet_id, user_id, limit)
+    started_at = time.perf_counter()
+    result = ctx.ledger.list_transfers_scoped(query, scope)
     elapsed_ms = (time.perf_counter() - started_at) * 1000.0
     if not result:
         _print_result_box("ERROR", "list-transfers", "No se encontraron transferencias con esos filtros.")
