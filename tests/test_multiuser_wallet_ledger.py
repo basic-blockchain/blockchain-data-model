@@ -1,7 +1,7 @@
 from decimal import Decimal
 from unittest.mock import patch
 
-from domain.multiuser_wallet_ledger import MultiUserWalletLedger
+from domain.multiuser_wallet_ledger import MultiUserWalletLedger, TransferListQuery
 
 
 def test_create_users_wallets_and_transfer_flow():
@@ -360,6 +360,71 @@ def test_verify_transfer_integrity_detects_hash_tampering():
     report = ledger.verify_transfer_integrity()
     assert report["valid"] is False
     assert "Hash de transferencia inválido" in report["reason"]
+
+
+def test_list_transfers_scoped_non_admin_is_limited_to_own_wallets():
+    ledger = MultiUserWalletLedger()
+    ledger.create_user("u-alice", "Alice")
+    ledger.create_user("u-bob", "Bob")
+    ledger.create_user("u-caro", "Caro")
+
+    alice_wallet = ledger.create_wallet("u-alice", wallet_id="wallet_user_alice_utxo_01")
+    bob_wallet = ledger.create_wallet("u-bob", wallet_id="wallet_user_bravo_utxo_02")
+    ledger.create_wallet("u-caro", wallet_id="wallet_user_carlo_utxo_03")
+
+    ledger.mint("wallet_user_bravo_utxo_02", "20")
+    assert "Transferencia" in ledger.transfer(
+        "wallet_user_bravo_utxo_02",
+        "wallet_user_carlo_utxo_03",
+        "5",
+        fee="0",
+        sender_token=bob_wallet["auth_token"],
+    )
+
+    # Usuario no admin intenta forzar user_id ajeno; debe seguir filtrado por su propio alcance.
+    scope = ledger.build_transfer_access_scope("u-alice", ["VIEWER"])
+    result = ledger.list_transfers_scoped(
+        TransferListQuery(user_id="u-bob", limit=50),
+        scope,
+    )
+    assert result == []
+
+    # Si Alice crea una transferencia propia, entonces aparece dentro de su alcance.
+    ledger.mint("wallet_user_alice_utxo_01", "10")
+    assert "Transferencia" in ledger.transfer(
+        "wallet_user_alice_utxo_01",
+        "wallet_user_bravo_utxo_02",
+        "2",
+        fee="0",
+        sender_token=alice_wallet["auth_token"],
+    )
+    result = ledger.list_transfers_scoped(TransferListQuery(limit=50), scope)
+    assert len(result) >= 1
+    assert any(r.get("sender_wallet") == "wallet_user_alice_utxo_01" for r in result)
+
+
+def test_list_transfers_scoped_admin_can_filter_by_any_user():
+    ledger = MultiUserWalletLedger()
+    ledger.create_user("u-admin", "Admin")
+    ledger.create_user("u-bob", "Bob")
+    ledger.create_user("u-caro", "Caro")
+
+    bob_wallet = ledger.create_wallet("u-bob", wallet_id="wallet_user_bravo_utxo_02")
+    ledger.create_wallet("u-caro", wallet_id="wallet_user_carlo_utxo_03")
+    ledger.mint("wallet_user_bravo_utxo_02", "20")
+
+    assert "Transferencia" in ledger.transfer(
+        "wallet_user_bravo_utxo_02",
+        "wallet_user_carlo_utxo_03",
+        "3",
+        fee="0",
+        sender_token=bob_wallet["auth_token"],
+    )
+
+    scope = ledger.build_transfer_access_scope("u-admin", ["ADMIN"])
+    result = ledger.list_transfers_scoped(TransferListQuery(user_id="u-bob", limit=50), scope)
+    assert len(result) >= 1
+    assert any(r.get("sender_wallet") == "wallet_user_bravo_utxo_02" for r in result)
 
 
 def test_utxo_transfer_flow_updates_balances_and_utxos():
