@@ -17,7 +17,7 @@ if sys.stderr.encoding and sys.stderr.encoding.lower().replace("-", "") != "utf8
 if sys.stdout.encoding and sys.stdout.encoding.lower().replace("-", "") != "utf8":
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
-from domain.multiuser_wallet_ledger import MultiUserWalletLedger
+from domain.multiuser_wallet_ledger import MultiUserWalletLedger, TransferListQuery
 from persistence.factory import create_wallet_store
 from persistence.interfaces import WalletLedgerRepository
 
@@ -700,14 +700,19 @@ def main() -> None:
             _require_auth(Permission.VIEW_ALERTS)
             result = ledger.list_alerts(limit=args.limit, user_id=args.user_id, severity=args.severity)
         elif args.command == "list-transfers":
-            _require_auth(Permission.VIEW_TRANSFERS)
-            result = ledger.list_transfers(
+            payload = _require_auth(Permission.VIEW_TRANSFERS)
+            scope = ledger.build_transfer_access_scope(
+                actor_user_id=payload.get("sub", ""),
+                actor_roles=payload.get("roles", []),
+            )
+            query = TransferListQuery(
                 limit=args.limit,
                 wallet_id=args.wallet_id,
                 user_id=args.user_id,
                 transfer_type=args.transfer_type,
                 transfer_id=args.transfer_id,
             )
+            result = ledger.list_transfers_scoped(query, scope)
         elif args.command == "verify-integrity":
             _require_auth(Permission.VIEW_WALLETS)
             result = ledger.verify_transfer_integrity()
